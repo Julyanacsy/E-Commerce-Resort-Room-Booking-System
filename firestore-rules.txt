@@ -2,14 +2,19 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Allow public bookings (no auth required) - for OTP booking system
-    match /guestbooking/{document=**} {
-      allow create: if true;  // Anyone can create a booking
-      allow read: if true;  // Allow public read for availability checking (API routes need this)
-      // Allow updates from server-side API routes (status changes)
-      // Note: In production, consider using Firebase Admin SDK for better security
-      allow update: if true;  // Allow updates (API routes are server-side)
-      allow delete: if request.auth != null;  // Only admins can delete
+    // Guest bookings are created and managed by authenticated server APIs using Admin SDK.
+    match /guestbooking/{bookingId} {
+      allow create: if false;
+      allow read, update, delete: if request.auth != null
+        && resource.data.get("ownerUid", "") == request.auth.uid;
+    }
+
+    // OTP challenges and date locks are server-only records.
+    match /bookingOtpChallenges/{challengeId} {
+      allow read, write: if false;
+    }
+    match /bookingDateLocks/{lockId} {
+      allow read, write: if false;
     }
     
     // Rooms are public, but writes belong to the authenticated room owner.
@@ -100,10 +105,15 @@ service cloud.firestore {
           : request.auth != null;
     }
     
-    // Unlisted collections require authentication. Exclude rooms so this
-    // fallback cannot bypass the owner checks above (Firestore rules are ORed).
+    // Unlisted collections require authentication. Exclude collections with
+    // explicit rules so this fallback cannot bypass them (Firestore rules are ORed).
     match /{collection}/{document=**} {
-      allow read, write: if collection != "rooms" && request.auth != null;
+      allow read, write: if !(collection in [
+        "rooms",
+        "guestbooking",
+        "bookingOtpChallenges",
+        "bookingDateLocks"
+      ]) && request.auth != null;
     }
   }
 }

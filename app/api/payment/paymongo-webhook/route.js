@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server"
 import crypto from "crypto"
-import { db } from "@/lib/firebase"
-import { collection, query, where, getDocs, getDoc, updateDoc, doc, serverTimestamp } from "firebase/firestore"
+import { getAdminFirestore } from "@/lib/firebase-admin"
 import { normalizeOwnerUid } from "@/lib/booking-tenant"
 import { resolvePaymentForBooking } from "@/lib/resort-payment-server"
 
@@ -30,6 +29,11 @@ function verifySignature(payload, signature, secret) {
 
 export async function POST(request) {
   try {
+    const db = getAdminFirestore()
+    if (!db) {
+      return NextResponse.json({ error: "Firebase Admin credentials are not configured" }, { status: 503 })
+    }
+
     // Get raw body for signature verification
     const rawBody = await request.text()
     const signature = request.headers.get("paymongo-signature")
@@ -50,9 +54,11 @@ export async function POST(request) {
     let ownerUidForWebhook = null
     if (paymentLinkIdEarly) {
       try {
-        const bookingsRef = collection(db, "guestbooking")
-        const q = query(bookingsRef, where("paymentLinkId", "==", paymentLinkIdEarly))
-        const snap = await getDocs(q)
+        const snap = await db
+          .collection("guestbooking")
+          .where("paymentLinkId", "==", paymentLinkIdEarly)
+          .limit(1)
+          .get()
         if (!snap.empty) {
           ownerUidForWebhook = normalizeOwnerUid(snap.docs[0].data()?.ownerUid)
         }
@@ -106,9 +112,11 @@ export async function POST(request) {
       // First try to find by payment link ID
       if (paymentLinkId) {
         try {
-          const bookingsRef = collection(db, "guestbooking")
-          const q = query(bookingsRef, where("paymentLinkId", "==", paymentLinkId))
-          const querySnapshot = await getDocs(q)
+          const querySnapshot = await db
+            .collection("guestbooking")
+            .where("paymentLinkId", "==", paymentLinkId)
+            .limit(1)
+            .get()
           
           if (!querySnapshot.empty) {
             bookingId = querySnapshot.docs[0].id
@@ -176,8 +184,7 @@ export async function POST(request) {
             console.log(`Trying to find booking by description: room="${roomName}", checkIn="${checkIn}", checkOut="${checkOut}"`)
             
             // Try to find booking by room name and dates
-            const bookingsRef = collection(db, "guestbooking")
-            const allBookingsSnapshot = await getDocs(bookingsRef)
+            const allBookingsSnapshot = await db.collection("guestbooking").limit(1000).get()
             
             const matchingBooking = allBookingsSnapshot.docs.find(doc => {
               const data = doc.data()
@@ -219,10 +226,10 @@ export async function POST(request) {
 
       // Update booking in Firestore
       try {
-        const bookingDocRef = doc(db, "guestbooking", bookingId)
+        const bookingDocRef = db.collection("guestbooking").doc(bookingId)
 
         // Get booking data to check current status and check-out date
-        const bookingDoc = await getDoc(bookingDocRef)
+        const bookingDoc = await bookingDocRef.get()
         const bookingData = bookingDoc.exists() ? bookingDoc.data() : null
 
         // Update booking with payment information
@@ -231,8 +238,8 @@ export async function POST(request) {
           paymentId: paymentData.id,
           paymentLinkId: paymentLinkId,
           paidAmount: amountInPesos,
-          paidAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
+          paidAt: new Date(),
+          updatedAt: new Date(),
         }
 
         // Check if booking check-out date has passed, auto-complete if so
@@ -243,12 +250,12 @@ export async function POST(request) {
 
           if (checkOutDate < today) {
             updateData.status = "Completed"
-            updateData.updatedAt = serverTimestamp()
+            updateData.updatedAt = new Date()
             console.log(`✅ Booking ${bookingId} will be auto-completed (check-out date passed)`)
           }
         }
 
-        await updateDoc(bookingDocRef, updateData)
+        await bookingDocRef.update(updateData)
 
         console.log(`✅ Booking ${bookingId} marked as paid. Amount: ₱${amountInPesos}`)
 
@@ -278,4 +285,3 @@ export async function POST(request) {
     )
   }
 }
-

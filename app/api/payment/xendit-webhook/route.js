@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server"
-import { db } from "@/lib/firebase"
-import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore"
+import { getAdminFirestore } from "@/lib/firebase-admin"
 import { normalizeOwnerUid } from "@/lib/booking-tenant"
 import { fetchResortPaymentSecrets } from "@/lib/resort-payment-server"
 
@@ -10,6 +9,11 @@ import { fetchResortPaymentSecrets } from "@/lib/resort-payment-server"
  */
 export async function POST(request) {
   try {
+    const db = getAdminFirestore()
+    if (!db) {
+      return NextResponse.json({ error: "Firebase Admin credentials are not configured" }, { status: 503 })
+    }
+
     const token = request.headers.get("x-callback-token") || request.headers.get("X-Callback-Token") || ""
     const body = await request.json()
     const bookingId =
@@ -19,8 +23,8 @@ export async function POST(request) {
       return NextResponse.json({ error: "Missing booking reference" }, { status: 400 })
     }
 
-    const bookingRef = doc(db, "guestbooking", bookingId)
-    const bookingSnap = await getDoc(bookingRef)
+    const bookingRef = db.collection("guestbooking").doc(bookingId)
+    const bookingSnap = await bookingRef.get()
     if (!bookingSnap.exists()) {
       return NextResponse.json({ error: "Booking not found" }, { status: 404 })
     }
@@ -37,13 +41,13 @@ export async function POST(request) {
     const status = String(body.status || "").toUpperCase()
     if (status === "PAID" || status === "SETTLED" || status === "COMPLETED") {
       const amount = typeof body.amount === "number" ? body.amount : Number(body.amount || 0)
-      await updateDoc(bookingRef, {
+      await bookingRef.update({
         paymentStatus: "paid",
         paymentId: body.id || "",
         paymentProvider: "xendit",
         paidAmount: amount,
-        paidAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        paidAt: new Date(),
+        updatedAt: new Date(),
       })
       return NextResponse.json({ success: true, bookingId })
     }
