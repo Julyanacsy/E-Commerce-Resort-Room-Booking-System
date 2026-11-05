@@ -148,6 +148,25 @@ Owner accounts manage rooms whose `ownerUid` matches their Firebase Auth UID. Ne
 
 The public resort site is available at `/?o=<ownerUid>` and the shorter `/stay/<ownerUid>` URL redirects to it. Both render the same owner-scoped rooms and booking experience. Configure `settings/marketplace.legacyUnscopedRoomsOwnerUid` (or `NEXT_PUBLIC_LEGACY_UNSCOPED_ROOMS_OWNER_UID`) to group older unscoped rooms with the intended legacy resort.
 
+### Bookings
+Booking documents are stored in the Firestore `guestbooking` collection and are created only after the server verifies the emailed OTP. Each booking contains:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `name`, `email`, `phone` | string | Guest contact details |
+| `roomType`, `roomId` | string | Selected room name and Firestore document ID |
+| `checkIn`, `checkOut` | `YYYY-MM-DD` string | Requested stay dates; checkout is exclusive for availability |
+| `guests` | number | Guest count |
+| `specialRequests` | string | Optional guest notes |
+| `nights`, `pricePerNight`, `totalPrice` | number | Server-calculated stay and price snapshot |
+| `status` | string | `Pending`, `Approved`, `Declined`, `Cancelled`, or `Completed` |
+| `paymentStatus` | string | Payment workflow status |
+| `ownerUid` | string | Resort owner's Firebase Auth UID; omitted for legacy marketplace bookings |
+| `proofOfPaymentUrl`, `validIdUrl` | string | Optional resort-booking proof/ID image data URLs |
+| `createdAt`, `updatedAt` | Firestore timestamp | Server-generated timestamps |
+
+Availability locks and OTP challenges are stored in server-only collections. Client Firestore access to booking data is denied; booking and admin APIs use the Firebase Admin SDK. Configure `FIREBASE_SERVICE_ACCOUNT_JSON` and a random `OTP_SECRET` on the server. Configure `NEXT_PUBLIC_RECAPTCHA_SITE_KEY` and `RECAPTCHA_SECRET_KEY` for reCAPTCHA.
+
 ### Payment Integration
 - PayMongo payment links generated for approved bookings
 - Webhook integration for payment status updates

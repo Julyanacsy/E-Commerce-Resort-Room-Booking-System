@@ -499,7 +499,12 @@ export default function Home() {
 
   const uploadGuestFile = async (file) => {
     /** Shrinks photos client-side so proof/ID fit in one Firestore booking doc (no Storage). */
-    return await compressImageFileToDataUrl(file)
+    return await compressImageFileToDataUrl(file, {
+      maxWidth: 1200,
+      maxHeight: 1000,
+      quality: 0.72,
+      maxChars: 350_000,
+    })
   }
 
   // Fetch rooms from Firestore (legacy landing = no ownerUid; `?o=` = that resort's rooms)
@@ -668,19 +673,7 @@ export default function Home() {
       return
     }
 
-    // Check if check-out date is booked
-    if (bookedDates.includes(formData.checkOut)) {
-      setDateAvailability({
-        checking: false,
-        available: false,
-        message: "This check-out date is already booked. Please select a different date.",
-      })
-      return
-    }
-
-    // Quick check: if any date in the range is booked, it's not available
-    // Check ALL dates from check-in to check-out (inclusive)
-    // Use local date formatting to avoid timezone issues
+    // A check-out date is not occupied; compare only nights before check-out.
     const checkInParts = formData.checkIn.split("-").map(Number)
     const checkOutParts = formData.checkOut.split("-").map(Number)
     const startDate = new Date(checkInParts[0], checkInParts[1] - 1, checkInParts[2])
@@ -695,9 +688,9 @@ export default function Home() {
       bookedDatesCount: bookedDates.length
     })
     
-    // Loop through each date from check-in to check-out (inclusive)
+    // Loop through each occupied night, excluding the checkout date.
     const currentDate = new Date(startDate)
-    while (currentDate <= endDate) {
+    while (currentDate < endDate) {
       // Format date in local timezone (YYYY-MM-DD)
       const year = currentDate.getFullYear()
       const month = String(currentDate.getMonth() + 1).padStart(2, "0")
@@ -774,29 +767,16 @@ export default function Home() {
 
       setBookingSubmitting(true)
       try {
-        if (recaptchaConfigured && recaptchaToken) {
-          const recaptchaResponse = await fetch("/api/booking/verify-recaptcha", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token: recaptchaToken }),
-          })
-
-          const recaptchaData = await recaptchaResponse.json()
-
-          if (!recaptchaResponse.ok) {
-            toast.error(recaptchaData.error || "reCAPTCHA verification failed")
-            recaptchaRef.current?.reset()
-            setRecaptchaToken(null)
-            return
-          }
-        }
-
         // Normalize email (trim and lowercase)
         const normalizedEmail = formData.email.trim().toLowerCase()
         const response = await fetch("/api/booking/send-otp", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: normalizedEmail, ownerUid: bookingOwnerUid }),
+          body: JSON.stringify({
+            email: normalizedEmail,
+            ownerUid: bookingOwnerUid,
+            recaptchaToken,
+          }),
         })
         
         const data = await response.json()
@@ -821,6 +801,11 @@ export default function Home() {
                     description: `${data.hint}${data.code ? ` (${data.code})` : ""}`,
                     duration: 12000,
                   }
+                : data.retryAfterSeconds
+                  ? {
+                      description: `Try again in ${data.retryAfterSeconds} seconds.`,
+                      duration: 8000,
+                    }
                 : { duration: 6000 }),
             })
           }
@@ -840,21 +825,20 @@ export default function Home() {
         const normalizedOtp = otpCode.trim()
         
         // Use offline-first approach
-        const result = await syncManager.submitWithOfflineSupport(
-          "/api/booking/verify-otp",
-          "POST",
-          {
+        const response = await fetch("/api/booking/verify-otp", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
             ...formData,
             email: normalizedEmail,
             otp: normalizedOtp,
             ownerUid: bookingOwnerUid,
             ...(paymentRequired ? { proofOfPaymentUrl, validIdUrl } : {}),
-          },
-          "booking",
-          24 * 60 * 60 * 1000 // 24 hours max age
-        )
-        
-        if (result.success) {
+          }),
+        })
+        const result = await response.json()
+
+        if (response.ok && result.success) {
           toast.success("Booking confirmed successfully! We've sent a confirmation email. Your booking status is pending admin approval.", {
             duration: 6000,
           })
@@ -873,29 +857,8 @@ export default function Home() {
           setValidIdUrl("")
           setOtpSent(false)
           setOtpCode("")
-    setBookingConfirmed(true)
-        } else if (result.offlineId) {
-          // Saved for offline - show success message
-          toast.success("Your booking is saved offline and will be submitted when you're back online!", {
-            duration: 6000,
-            })
-          // Reset form
-          setFormData({
-            name: "",
-            email: "",
-            phone: "",
-            checkIn: "",
-            checkOut: "",
-            guests: "",
-            roomType: "",
-            specialRequests: "",
-            })
-          setProofOfPaymentUrl("")
-          setValidIdUrl("")
-          setOtpSent(false)
-          setOtpCode("")
           setBookingConfirmed(true)
-          } else {
+        } else {
           toast.error(result.error || "Failed to submit booking. Please try again.")
         }
       } catch (error) {
@@ -1941,12 +1904,6 @@ export default function Home() {
                             const day = String(date.getDate()).padStart(2, "0")
                             const dateStr = `${year}-${month}-${day}`
                             
-                            // Check if selected date is booked
-                            if (bookedDates.includes(dateStr)) {
-                              toast.error("⚠️ This date is already booked. Please select a different date.")
-                              return
-                            }
-                            
                             // Validate check-out is after check-in
                             if (formData.checkIn && dateStr <= formData.checkIn) {
                               toast.error("Check-out date must be after check-in date.")
@@ -1969,12 +1926,7 @@ export default function Home() {
                               if (date <= checkInDate) return true
                             }
                             
-                            // Disable booked dates - format date in local timezone
-                            const year = date.getFullYear()
-                            const month = String(date.getMonth() + 1).padStart(2, "0")
-                            const day = String(date.getDate()).padStart(2, "0")
-                            const dateStr = `${year}-${month}-${day}`
-                            return bookedDates.includes(dateStr)
+                            return false
                           }}
                           modifiers={{
                             booked: bookedDates.map(d => {
@@ -1996,11 +1948,6 @@ export default function Home() {
                     </Popover>
                     {!formData.checkIn && (
                       <p className="mt-1 text-xs text-gray-500">Please select check-in date first</p>
-                    )}
-                    {bookedDates.includes(formData.checkOut) && (
-                      <p className="mt-1 text-xs text-red-600 font-semibold flex items-center gap-1">
-                        <span>🔴</span> This date is already booked
-                      </p>
                     )}
                   </div>
                 </div>

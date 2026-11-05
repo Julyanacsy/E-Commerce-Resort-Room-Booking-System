@@ -1,0 +1,239 @@
+import crypto from "node:crypto"
+import {
+  getResortAdminMailDisplayName,
+  resolveAdminInboxEmail,
+  resolveCentralEnvMail,
+} from "@/lib/central-env-mail"
+import {
+  datesBetween,
+  findRoomForTenant,
+  getBookedDates,
+  getBookingDb,
+  getLegacyRoomOwnerUid,
+  getManilaDate,
+  getRoomKey,
+  normalizeDate,
+  overlaps,
+} from "@/lib/booking-api-server"
+import { normalizeOwnerUid } from "@/lib/booking-tenant"
+import { verifyOtpInTransaction } from "@/lib/otp-store"
+
+const MAX_UPLOAD_CHARS = 350_000
+
+function validUpload(value) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_UPLOAD_CHARS &&
+    /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(value)
+  )
+}
+
+export async function POST(request) {
+  let body
+  try {
+    body = await request.json()
+  } catch {
+    return Response.json({ error: "Invalid JSON request." }, { status: 400 })
+  }
+
+  const name = String(body?.name || "").trim()
+  const email = String(body?.email || "").trim().toLowerCase()
+  const phone = String(body?.phone || "").trim()
+  const roomType = String(body?.roomType || "").trim()
+  const checkIn = normalizeDate(body?.checkIn)
+  const checkOut = normalizeDate(body?.checkOut)
+  const guests = Number(body?.guests)
+  const otp = String(body?.otp || "").trim()
+  const ownerUid = normalizeOwnerUid(body?.ownerUid)
+  const specialRequests = String(body?.specialRequests || "").trim().slice(0, 2000)
+
+  if (
+    !name ||
+    name.length > 120 ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+    email.length > 254 ||
+    !phone ||
+    phone.length > 40 ||
+    !roomType ||
+    roomType.length > 120 ||
+    !checkIn ||
+    !checkOut ||
+    checkIn >= checkOut ||
+    !Number.isInteger(guests) ||
+    guests < 1 ||
+    guests > 20 ||
+    !/^\d{6}$/.test(otp)
+  ) {
+    return Response.json({ error: "Booking details or verification code are invalid." }, { status: 400 })
+  }
+
+  const stayDates = datesBetween(checkIn, checkOut)
+  if (!stayDates) {
+    return Response.json({ error: "Stay must be between 1 and 60 nights." }, { status: 400 })
+  }
+  if (checkIn < getManilaDate()) {
+    return Response.json({ error: "Check-in date cannot be in the past." }, { status: 400 })
+  }
+  if (ownerUid && (!validUpload(body?.proofOfPaymentUrl) || !validUpload(body?.validIdUrl))) {
+    return Response.json({ error: "Upload valid proof of payment and one valid ID." }, { status: 400 })
+  }
+
+  const db = getBookingDb()
+  if (!db) {
+    return Response.json({ error: "Firebase Admin credentials are not configured." }, { status: 503 })
+  }
+
+  try {
+    const room = await findRoomForTenant(db, roomType, ownerUid)
+    if (!room || (room.availability && room.availability !== "Available")) {
+      return Response.json({ error: "The selected room is no longer available." }, { status: 409 })
+    }
+    if (guests > Math.max(1, Number(room.maxGuests) || 1)) {
+      return Response.json({ error: "Guest count exceeds this room's capacity." }, { status: 400 })
+    }
+    const rawPrice = Number(room.price)
+    if (!Number.isFinite(rawPrice) || rawPrice < 0) {
+      return Response.json({ error: "The selected room does not have a valid price." }, { status: 409 })
+    }
+
+    const bookedDates = await getBookedDates(db, roomType, ownerUid)
+    if (bookedDates.some((date) => date >= checkIn && date < checkOut)) {
+      return Response.json({ error: "Those dates are no longer available. Please choose different dates." }, { status: 409 })
+    }
+
+    const nights = stayDates.length
+    const price = rawPrice
+    const rawDiscount = Number(room.discount)
+    const discount = Number.isFinite(rawDiscount) ? Math.max(0, Math.min(100, rawDiscount)) : 0
+    const pricePerNight = price * (1 - discount / 100)
+    const totalPrice = Math.round(pricePerNight * nights * 100) / 100
+    if (!Number.isFinite(totalPrice)) {
+      return Response.json({ error: "The selected room price is too large to process." }, { status: 409 })
+    }
+    const bookingRef = db.collection("guestbooking").doc()
+    const roomKey = getRoomKey(ownerUid, roomType)
+    const legacyUid = await getLegacyRoomOwnerUid(db)
+    const lockRefs = stayDates.map((date) =>
+      db.collection("bookingDateLocks").doc(
+        crypto.createHash("sha256").update(`${roomKey}\n${date}`).digest("hex"),
+      ),
+    )
+    const bookingData = {
+      name,
+      email,
+      phone,
+      roomType,
+      roomId: room.id,
+      checkIn,
+      checkOut,
+      guests,
+      specialRequests,
+      nights,
+      pricePerNight,
+      totalPrice,
+      status: "Pending",
+      paymentStatus: ownerUid ? "submitted_for_review" : "unpaid",
+      ...(ownerUid ? { ownerUid, proofOfPaymentUrl: body.proofOfPaymentUrl, validIdUrl: body.validIdUrl } : {}),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }
+
+    const result = await db.runTransaction(async (transaction) => {
+      const otpResult = await verifyOtpInTransaction(transaction, db, { email, ownerUid, otp })
+      if (!otpResult.ok) return { otpResult }
+
+      const lockSnapshots = await Promise.all(lockRefs.map((ref) => transaction.get(ref)))
+      if (lockSnapshots.some((snapshot) => snapshot.exists)) {
+        throw new Error("DATES_UNAVAILABLE")
+      }
+
+      const existing = await transaction.get(
+        db.collection("guestbooking").where("roomType", "==", roomType),
+      )
+      const tenantBookings = existing.docs.filter((snapshot) => {
+        const data = snapshot.data()
+        const bookingOwner = normalizeOwnerUid(data.ownerUid)
+        const belongs =
+          !ownerUid
+            ? !bookingOwner
+            : legacyUid === ownerUid
+              ? !bookingOwner || bookingOwner === ownerUid
+              : bookingOwner === ownerUid
+        return belongs && (data.status === "Pending" || data.status === "Approved" || !data.status)
+      })
+      if (
+        tenantBookings.some((snapshot) => {
+          const data = snapshot.data()
+          return overlaps(checkIn, checkOut, data.checkIn, data.checkOut)
+        })
+      ) {
+        throw new Error("DATES_UNAVAILABLE")
+      }
+
+      transaction.delete(otpResult.ref)
+      transaction.create(bookingRef, bookingData)
+      lockRefs.forEach((ref, index) => {
+        transaction.create(ref, {
+          roomKey,
+          ownerUid: ownerUid || null,
+          roomType,
+          date: stayDates[index],
+          bookingId: bookingRef.id,
+          createdAt: new Date(),
+        })
+      })
+      return { success: true }
+    })
+    if (result.otpResult && !result.otpResult.ok) {
+      const error =
+        result.otpResult.reason === "expired"
+          ? "Your verification code expired. Request a new one."
+          : result.otpResult.reason === "locked"
+            ? "Too many incorrect codes. Request a new one."
+            : "Verification code is invalid or expired."
+      return Response.json({ error }, { status: 400 })
+    }
+
+    try {
+      const mail = await resolveCentralEnvMail()
+      if (mail.ok) {
+        await mail.transporter.sendMail({
+          from: `"${mail.brandName}" <${mail.user}>`,
+          to: email,
+          replyTo: mail.replyTo,
+          subject: `Booking request received — ${mail.brandName}`,
+          text: `Hello ${name}, your booking request for ${roomType} from ${checkIn} to ${checkOut} has been received and is pending resort approval. Booking reference: ${bookingRef.id}.`,
+          html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#1f2937"><h2>Booking request received</h2><p>Hello ${name.replace(/[<>&"]/g, "")},</p><p>Your request for <strong>${roomType.replace(/[<>&"]/g, "")}</strong> from ${checkIn} to ${checkOut} has been received and is pending resort approval.</p><p>Booking reference: <strong>${bookingRef.id}</strong></p></div>`,
+        })
+        const adminEmail = resolveAdminInboxEmail({
+          brandingEmail: mail.brandingEmail,
+          replyTo: mail.replyTo,
+          smtpUser: mail.user,
+        })
+        if (adminEmail) {
+          await mail.transporter.sendMail({
+            from: `"${getResortAdminMailDisplayName()}" <${mail.user}>`,
+            to: adminEmail,
+            replyTo: mail.replyTo,
+            subject: `New booking request — ${roomType}`,
+            text: `New booking request from ${name} (${email}) for ${roomType}, ${checkIn} to ${checkOut}. Booking reference: ${bookingRef.id}.`,
+            html: `<p>New booking request from ${name.replace(/[<>&"]/g, "")} (${email.replace(/[<>&"]/g, "")}) for ${roomType.replace(/[<>&"]/g, "")}, ${checkIn} to ${checkOut}.</p><p>Booking reference: ${bookingRef.id}</p>`,
+          })
+        }
+      } else {
+        console.warn("Booking confirmation email skipped:", mail.code, mail.message)
+      }
+    } catch (mailError) {
+      console.error("Failed to send booking confirmation email:", mailError)
+    }
+
+    return Response.json({ success: true, bookingId: bookingRef.id })
+  } catch (error) {
+    if (error.message === "DATES_UNAVAILABLE") {
+      return Response.json({ error: "Those dates are no longer available. Please choose different dates." }, { status: 409 })
+    }
+    console.error("Failed to verify OTP and create booking:", error)
+    return Response.json({ error: "Failed to save booking. Please try again." }, { status: 500 })
+  }
+}
