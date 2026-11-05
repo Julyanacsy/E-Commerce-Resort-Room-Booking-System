@@ -1,0 +1,81 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Allow public bookings (no auth required) - for OTP booking system
+    match /guestbooking/{document=**} {
+      allow create: if true;  // Anyone can create a booking
+      allow read: if true;  // Allow public read for availability checking (API routes need this)
+      // Allow updates from server-side API routes (status changes)
+      // Note: In production, consider using Firebase Admin SDK for better security
+      allow update: if true;  // Allow updates (API routes are server-side)
+      allow delete: if request.auth != null;  // Only admins can delete
+    }
+    
+    // Rooms collection - allow public read, auth required for write
+    match /rooms/{document=**} {
+      allow read: if true;  // Public can view rooms
+      allow write: if request.auth != null;  // Only admins can modify
+    }
+    
+    // Contact messages collection
+    match /contactMessages/{document=**} {
+      allow create: if true;  // Anyone can send contact messages
+      allow read, update, delete: if request.auth != null;  // Only admins can view/update/delete
+    }
+    
+    // Feedbacks collection
+    match /feedbacks/{document=**} {
+      allow create: if true;  // Anyone can submit feedback
+      allow read: if true;  // Public can view published feedbacks
+      allow update, delete: if request.auth != null;  // Only admins can update/delete
+    }
+    
+    // Per-owner outbound email (Gmail) — only that signed-in owner can read/write.
+    match /resortOwners/{ownerId}/secrets/{docId} {
+      allow read, write: if request.auth != null && request.auth.uid == ownerId;
+    }
+
+    // Per-resort public site branding (landing + admin). Anyone can read; only that owner can write.
+    match /resortOwners/{ownerId}/site/{docId} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == ownerId;
+    }
+
+    // Super Admin audit log — read/create only for authorized emails (append-only).
+    match /superAdminAuditLog/{logId} {
+      function isSuperAdminEmail() {
+        return request.auth != null
+          && request.auth.token.email != null
+          && (request.auth.token.email == "ecommerceresortadmin@gmail.com"
+              || request.auth.token.email == "commerceresortadmin@gmail.com");
+      }
+      allow read: if isSuperAdminEmail();
+      allow create: if isSuperAdminEmail();
+      allow update, delete: if false;
+    }
+
+    // Settings: public read except resort SMTP doc (super admin only).
+    match /settings/{document} {
+      function isSuperAdminEmail() {
+        return request.auth != null
+          && request.auth.token.email != null
+          && (request.auth.token.email == "ecommerceresortadmin@gmail.com"
+              || request.auth.token.email == "commerceresortadmin@gmail.com");
+      }
+      allow read: if document != "resortNotifySmtp" || isSuperAdminEmail();
+      // Marketplace copy: only super admins may change (any signed-in user can still edit branding, etc.).
+      allow write: if document == "resortNotifySmtp"
+        ? isSuperAdminEmail()
+        : document == "marketplace"
+          ? isSuperAdminEmail()
+          : request.auth != null;
+    }
+    
+    // All other collections require authentication
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
+
