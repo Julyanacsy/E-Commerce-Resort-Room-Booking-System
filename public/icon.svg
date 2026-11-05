@@ -1,0 +1,17 @@
+<svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    @media (prefers-color-scheme: light) {
+      .background { fill: #0B1220; }
+      .tile { fill: #FFFFFF; }
+    }
+    @media (prefers-color-scheme: dark) {
+      .background { fill: #FFFFFF; }
+      .tile { fill: #0B1220; }
+    }
+  </style>
+  <rect class="background" width="180" height="180" rx="37" />
+  <rect class="tile" x="52" y="52" width="30" height="30" rx="8" />
+  <rect class="tile" x="98" y="52" width="30" height="30" rx="8" />
+  <rect class="tile" x="52" y="98" width="30" height="30" rx="8" />
+  <rect class="tile" x="98" y="98" width="30" height="30" rx="8" />
+</svg>
