@@ -1,0 +1,55 @@
+{
+  "name": "LuxeStay - Hotel Booking System",
+  "short_name": "LuxeStay",
+  "description": "Luxury Hotel Booking and Management System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#059669",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/apple-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "categories": ["travel", "business"],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Book Now",
+      "short_name": "Book",
+      "description": "Make a new booking",
+      "url": "/#booking",
+      "icons": [{ "src": "/icon.svg", "sizes": "192x192", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "Admin Dashboard",
+      "short_name": "Admin",
+      "description": "Access admin panel",
+      "url": "/admin",
+      "icons": [{ "src": "/icon.svg", "sizes": "192x192", "type": "image/svg+xml" }]
+    }
+  ]
+}
+
