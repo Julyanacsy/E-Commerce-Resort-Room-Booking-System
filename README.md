@@ -144,7 +144,9 @@ Room documents are stored in the Firestore `rooms` collection. Each room uses th
 | `ownerUid` | string | Firebase Auth UID of the resort owner; omitted only for legacy unscoped rooms |
 | `createdAt` | Firestore timestamp | Room creation time |
 
-Owner accounts manage rooms whose `ownerUid` matches their Firebase Auth UID. The internal helpdesk account manages legacy room documents without an `ownerUid`.
+Owner accounts manage rooms whose `ownerUid` matches their Firebase Auth UID. New rooms are always saved with the signed-in UID. Internal helpdesk accounts may manage their own rooms and claim legacy room documents without an `ownerUid`; the claim assigns the helpdesk user's UID. Firestore rules permit only the matching owner to update or delete an owned room.
+
+The public resort site is available at `/?o=<ownerUid>` and the shorter `/stay/<ownerUid>` URL redirects to it. Both render the same owner-scoped rooms and booking experience. Configure `settings/marketplace.legacyUnscopedRoomsOwnerUid` (or `NEXT_PUBLIC_LEGACY_UNSCOPED_ROOMS_OWNER_UID`) to group older unscoped rooms with the intended legacy resort.
 
 ### Payment Integration
 - PayMongo payment links generated for approved bookings

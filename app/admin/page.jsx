@@ -493,7 +493,7 @@ export default function AdminPage() {
               id: doc.id,
               ...doc.data(),
             }))
-            .filter((r) => !r.ownerUid)
+            .filter((r) => !r.ownerUid || r.ownerUid === adminUser.uid)
           setRooms(mapped)
           setRoomsPage((prev) => {
             const totalPages = Math.max(1, Math.ceil(mapped.length / ROOMS_PER_PAGE))
@@ -746,8 +746,8 @@ export default function AdminPage() {
 
   const handleRoomSave = async (payload) => {
     try {
-      const legacy = Boolean(adminUser?.email && ALLOWED_ADMINS.includes(adminUser.email))
-      const ownerUid = !legacy && adminUser?.uid ? adminUser.uid : null
+      if (!adminUser?.uid) throw new Error("Sign in again before saving a room.")
+      const ownerUid = adminUser.uid
       await addDoc(collection(db, "rooms"), {
         name: payload.name,
         roomNumber: payload.number,
@@ -764,7 +764,7 @@ export default function AdminPage() {
         images: payload.images,
         mapsUrl: payload.mapsUrl || "",
         createdAt: serverTimestamp(),
-        ...(ownerUid ? { ownerUid } : {}),
+        ownerUid,
       })
 
       toast.success("Room saved successfully.")
@@ -780,6 +780,7 @@ export default function AdminPage() {
     const roomId = payload.id || previewRoom?.id
     if (!roomId) return
     try {
+      if (!adminUser?.uid) throw new Error("Sign in again before updating a room.")
       await updateDoc(doc(db, "rooms", roomId), {
         name: payload.name,
         roomNumber: payload.number,
@@ -794,6 +795,7 @@ export default function AdminPage() {
         availability: payload.availability,
         featured: Boolean(payload.featured),
         images: payload.images,
+        ownerUid: adminUser.uid,
         updatedAt: serverTimestamp(),
       })
       toast.success("Room updated successfully.")

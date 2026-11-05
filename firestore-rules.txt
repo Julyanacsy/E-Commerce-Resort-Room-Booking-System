@@ -12,10 +12,38 @@ service cloud.firestore {
       allow delete: if request.auth != null;  // Only admins can delete
     }
     
-    // Rooms collection - allow public read, auth required for write
-    match /rooms/{document=**} {
-      allow read: if true;  // Public can view rooms
-      allow write: if request.auth != null;  // Only admins can modify
+    // Rooms are public, but writes belong to the authenticated room owner.
+    // Internal helpdesk accounts may claim legacy room docs with no ownerUid.
+    match /rooms/{roomId} {
+      function isLegacyRoomsAdmin() {
+        return request.auth != null
+          && request.auth.token.email != null
+          && request.auth.token.email_verified == true
+          && (request.auth.token.email == "admin@luxestay.com"
+              || request.auth.token.email == "resort.helpdesk01@gmail.com");
+      }
+
+      function isUnscopedRoom() {
+        return resource.data.get("ownerUid", null) == null
+          || resource.data.get("ownerUid", "") == "";
+      }
+
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.ownerUid == request.auth.uid;
+      allow update: if request.auth != null
+        && (
+          (resource.data.get("ownerUid", "") == request.auth.uid
+            && request.resource.data.ownerUid == request.auth.uid)
+          || (isLegacyRoomsAdmin()
+            && isUnscopedRoom()
+            && request.resource.data.ownerUid == request.auth.uid)
+        );
+      allow delete: if request.auth != null
+        && (
+          resource.data.get("ownerUid", "") == request.auth.uid
+          || (isLegacyRoomsAdmin() && isUnscopedRoom())
+        );
     }
     
     // Contact messages collection
@@ -72,10 +100,10 @@ service cloud.firestore {
           : request.auth != null;
     }
     
-    // All other collections require authentication
-    match /{document=**} {
-      allow read, write: if request.auth != null;
+    // Unlisted collections require authentication. Exclude rooms so this
+    // fallback cannot bypass the owner checks above (Firestore rules are ORed).
+    match /{collection}/{document=**} {
+      allow read, write: if collection != "rooms" && request.auth != null;
     }
   }
 }
-

@@ -1,0 +1,5 @@
+* @Julyanacsy
+/components/admin/pages/manage-rooms.jsx @shielang123
+/components/admin/add-room-modal.jsx @shielang123
+/lib/maps-preview-url.js @shielang123
+/app/api/maps/resolve-short-link/ @shielang123
