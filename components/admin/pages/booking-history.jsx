@@ -1,1 +1,5 @@
-export default function BookingHistory() { return <div className="p-6">Coming soon</div> }
+import BookingList from "@/components/admin/booking-list"
+
+export default function BookingHistory(props) {
+  return <BookingList {...props} history />
+}

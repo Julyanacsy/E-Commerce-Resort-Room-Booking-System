@@ -20,6 +20,7 @@ import {
 import {
   BedDouble,
   CalendarCheck,
+  History,
   ChevronsLeft,
   ChevronsRight,
   LayoutDashboard,
@@ -66,6 +67,7 @@ import {
 import { AddRoomModal } from "@/components/admin/add-room-modal"
 import { PreviewRoomModal } from "@/components/admin/preview-room-modal"
 import ManageBookings from "@/components/admin/pages/manage-bookings"
+import BookingHistory from "@/components/admin/pages/booking-history"
 import ManageContact from "@/components/admin/pages/manage-contact"
 import ManageFeedback from "@/components/admin/pages/manage-feedback"
 import AdminOverview from "@/components/admin/pages/admin-overview"
@@ -77,6 +79,7 @@ const NAV_ITEMS = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "manage-rooms", label: "Manage Rooms", icon: BedDouble },
   { key: "manage-bookings", label: "Manage Bookings", icon: CalendarCheck },
+  { key: "booking-history", label: "Booking History", icon: History },
   { key: "contact-messages", label: "Contact Messages", icon: MessageCircle },
   { key: "manage-feedback", label: "Manage Feedback", icon: Star },
   { key: "brand-settings", label: "Brand Settings", icon: Paintbrush },
@@ -1126,6 +1129,19 @@ export default function AdminPage() {
 
           {currentPage === "manage-bookings" && (
             <ManageBookings
+              isLegacyHelpdesk={isLegacyHelpdesk}
+              ownerUid={tenantOwnerUid}
+              invoiceBusiness={{
+                name: brandForm.name,
+                address: brandForm.address,
+                phone: brandForm.phone,
+                email: brandForm.email,
+              }}
+            />
+          )}
+
+          {currentPage === "booking-history" && (
+            <BookingHistory
               isLegacyHelpdesk={isLegacyHelpdesk}
               ownerUid={tenantOwnerUid}
               invoiceBusiness={{
