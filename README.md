@@ -122,6 +122,29 @@ pnpm dev
 - **Feedback**: Publish/hide guest feedback
 - **Brand Settings**: Customize branding and contact info
 
+### Rooms
+Room documents are stored in the Firestore `rooms` collection. Each room uses these fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `name` | string | Guest-facing room name |
+| `roomNumber` | string | Resort's room identifier |
+| `type` | string | Room category, such as Standard, Deluxe, or Suite |
+| `description` | string | Room description |
+| `price` | number | Nightly price in PHP |
+| `discount` | number | Discount percentage |
+| `maxGuests` | number | Maximum guest capacity |
+| `bedType` | string | Primary bed type |
+| `beds` | number | Number of beds |
+| `amenities` | string array | Amenities shown with the room |
+| `availability` | string | Availability status, such as Available, Maintenance, or Unavailable |
+| `featured` | boolean | Whether the room is highlighted |
+| `images` | string array | Image URLs or data URLs for the room |
+| `ownerUid` | string | Firebase Auth UID of the resort owner; omitted only for legacy unscoped rooms |
+| `createdAt` | Firestore timestamp | Room creation time |
+
+Owner accounts manage rooms whose `ownerUid` matches their Firebase Auth UID. The internal helpdesk account manages legacy room documents without an `ownerUid`.
+
 ### Payment Integration
 - PayMongo payment links generated for approved bookings
 - Webhook integration for payment status updates
@@ -161,4 +184,3 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## Support
 
 For support, email admin@example.com or open an issue in the repository.
-
