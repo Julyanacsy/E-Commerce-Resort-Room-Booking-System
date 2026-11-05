@@ -1,6 +1,7 @@
 "use client"
 
 import { Check, Eye, Trash2, X } from "lucide-react"
+import { getGoogleDirectionsUrl } from "@/lib/maps-preview-url"
 
 export default function ManageRooms({
   rooms,
@@ -184,6 +185,16 @@ export default function ManageRooms({
                 <p className={`mt-2 text-sm ${isDark ? "text-gray-400" : "text-gray-500"}`}>
                   ₱{(room.price ?? 0).toLocaleString()} / night • {room.maxGuests ?? 1} guests
                 </p>
+                {room.mapsUrl && (
+                  <a
+                    href={getGoogleDirectionsUrl(room.mapsUrl, { destinationLabel: room.name })}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-flex w-fit text-sm font-medium text-emerald-700 underline-offset-2 hover:underline dark:text-emerald-300"
+                  >
+                    Open room map
+                  </a>
+                )}
                 <div className={`mt-4 flex flex-wrap gap-2 text-xs ${isDark ? "text-gray-400" : "text-gray-500"}`}>
                   <span className={`rounded-full px-3 py-1 ${isDark ? "bg-slate-700" : "bg-gray-100"}`}>
                     Type: {room.type}

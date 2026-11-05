@@ -140,6 +140,7 @@ Room documents are stored in the Firestore `rooms` collection. Each room uses th
 | `availability` | string | Availability status, such as Available, Maintenance, or Unavailable |
 | `featured` | boolean | Whether the room is highlighted |
 | `images` | string array | Image URLs or data URLs for the room |
+| `mapsUrl` | string | Optional Google Maps link for the room |
 | `ownerUid` | string | Firebase Auth UID of the resort owner; omitted only for legacy unscoped rooms |
 | `createdAt` | Firestore timestamp | Room creation time |
 

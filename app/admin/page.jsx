@@ -762,6 +762,7 @@ export default function AdminPage() {
         availability: payload.availability,
         featured: Boolean(payload.featured),
         images: payload.images,
+        mapsUrl: payload.mapsUrl || "",
         createdAt: serverTimestamp(),
         ...(ownerUid ? { ownerUid } : {}),
       })
@@ -1625,6 +1626,7 @@ export default function AdminPage() {
       onClose={() => setAddRoomOpen(false)}
       onSave={handleRoomSave}
       duplicateScopeOwnerUid={tenantOwnerUid}
+      existingRooms={rooms}
     />
     <PreviewRoomModal
       open={previewOpen}
