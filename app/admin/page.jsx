@@ -72,7 +72,7 @@ import ManageContact from "@/components/admin/pages/manage-contact"
 import ManageFeedback from "@/components/admin/pages/manage-feedback"
 import AdminOverview from "@/components/admin/pages/admin-overview"
 import ManageRooms from "@/components/admin/pages/manage-rooms"
-import PaymentIntegrationSettings from "@/components/admin/payment-integration-settings"
+import PaymentSettings from "@/components/admin/payment-settings"
 const ALLOWED_ADMINS = ["admin@luxestay.com", "resort.helpdesk01@gmail.com"]
 
 const NAV_ITEMS = [
@@ -1611,7 +1611,7 @@ export default function AdminPage() {
           )}
 
           {currentPage === "payment-integration" && (
-            <PaymentIntegrationSettings
+            <PaymentSettings
               tenantOwnerUid={tenantOwnerUid}
               isLegacyHelpdesk={isLegacyHelpdesk}
             />
