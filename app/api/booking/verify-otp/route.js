@@ -75,7 +75,7 @@ export async function POST(request) {
   if (checkIn < getManilaDate()) {
     return Response.json({ error: "Check-in date cannot be in the past." }, { status: 400 })
   }
-  if (ownerUid && (!validUpload(body?.proofOfPaymentUrl) || !validUpload(body?.validIdUrl))) {
+  if (ownerUid && (!validUpload(body?.proofOfPaymentImage) || !validUpload(body?.validIdImage))) {
     return Response.json({ error: "Upload valid proof of payment and one valid ID." }, { status: 400 })
   }
 
@@ -133,8 +133,14 @@ export async function POST(request) {
       pricePerNight,
       totalPrice,
       status: "Pending",
-      paymentStatus: ownerUid ? "submitted_for_review" : "unpaid",
-      ...(ownerUid ? { ownerUid, proofOfPaymentUrl: body.proofOfPaymentUrl, validIdUrl: body.validIdUrl } : {}),
+      paymentStatus: ownerUid ? "proof_submitted" : "unpaid",
+      ...(ownerUid
+        ? {
+            ownerUid,
+            proofOfPaymentImage: body.proofOfPaymentImage,
+            validIdImage: body.validIdImage,
+          }
+        : {}),
       createdAt: new Date(),
       updatedAt: new Date(),
     }

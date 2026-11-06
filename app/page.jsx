@@ -422,8 +422,8 @@ export default function Home() {
   const [bookingSubmitting, setBookingSubmitting] = useState(false)
   const [paymentQrUrl, setPaymentQrUrl] = useState("")
   const [paymentInstructions, setPaymentInstructions] = useState("")
-  const [proofOfPaymentUrl, setProofOfPaymentUrl] = useState("")
-  const [validIdUrl, setValidIdUrl] = useState("")
+  const [proofOfPaymentImage, setProofOfPaymentImage] = useState("")
+  const [validIdImage, setValidIdImage] = useState("")
   const [uploadingProof, setUploadingProof] = useState(false)
   const [uploadingId, setUploadingId] = useState(false)
   
@@ -489,12 +489,26 @@ export default function Home() {
       setPaymentInstructions("")
       return undefined
     }
-    const unsub = onSnapshot(doc(db, "resortOwners", bookingOwnerUid, "site", "payment"), (snap) => {
-      const d = snap.exists() ? snap.data() : {}
-      setPaymentQrUrl(String(d?.gcashQrUrl || "").trim())
-      setPaymentInstructions(String(d?.instructions || "").trim())
-    })
-    return () => unsub()
+    let active = true
+    const params = new URLSearchParams({ ownerUid: bookingOwnerUid })
+    fetch(`/api/resort/payment-settings?${params}`, { cache: "no-store" })
+      .then(async (response) => {
+        const result = await response.json()
+        if (!response.ok) throw new Error(result.error || "Payment details could not be loaded.")
+        if (!active) return
+        setPaymentQrUrl(String(result.gcashQrImage || "").trim())
+        setPaymentInstructions(String(result.paymentInstructions || "").trim())
+      })
+      .catch((error) => {
+        console.error("Failed to load resort payment details:", error)
+        if (active) {
+          setPaymentQrUrl("")
+          setPaymentInstructions("")
+        }
+      })
+    return () => {
+      active = false
+    }
   }, [bookingOwnerUid])
 
   const uploadGuestFile = async (file) => {
@@ -746,7 +760,7 @@ export default function Home() {
           toast.error("Payment QR code is not available yet. Please contact the resort admin.")
           return
         }
-        if (!proofOfPaymentUrl || !validIdUrl) {
+        if (!proofOfPaymentImage || !validIdImage) {
           toast.error("Please upload proof of payment and 1 valid ID before sending OTP.")
           return
         }
@@ -833,7 +847,7 @@ export default function Home() {
             email: normalizedEmail,
             otp: normalizedOtp,
             ownerUid: bookingOwnerUid,
-            ...(paymentRequired ? { proofOfPaymentUrl, validIdUrl } : {}),
+            ...(paymentRequired ? { proofOfPaymentImage, validIdImage } : {}),
           }),
         })
         const result = await response.json()
@@ -853,8 +867,8 @@ export default function Home() {
             roomType: "",
             specialRequests: "",
           })
-          setProofOfPaymentUrl("")
-          setValidIdUrl("")
+          setProofOfPaymentImage("")
+          setValidIdImage("")
           setOtpSent(false)
           setOtpCode("")
           setBookingConfirmed(true)
@@ -2122,20 +2136,25 @@ export default function Home() {
                       >
                         <span className="flex items-center gap-2 text-emerald-900">
                           <Upload className="h-4 w-4" />
-                          <span className="font-semibold">{proofOfPaymentUrl ? "Replace proof" : "Upload proof"}</span>
+                          <span className="font-semibold">{proofOfPaymentImage ? "Replace proof" : "Upload proof"}</span>
                         </span>
-                        <span className="text-xs text-gray-500">{proofOfPaymentUrl ? "Uploaded" : "PNG/JPG"}</span>
+                        <span className="text-xs text-gray-500">{proofOfPaymentImage ? "Uploaded" : "PNG/JPG"}</span>
                         <input
                           type="file"
-                          accept="image/*"
+                          accept="image/png,image/jpeg"
                           disabled={uploadingProof}
                           onChange={async (e) => {
                             const f = e.target.files?.[0]
                             if (!f) return
+                            if (!["image/png", "image/jpeg"].includes(f.type)) {
+                              toast.error("Choose a PNG or JPG image.")
+                              e.target.value = ""
+                              return
+                            }
                             setUploadingProof(true)
                             try {
                               const url = await uploadGuestFile(f)
-                              setProofOfPaymentUrl(url)
+                              setProofOfPaymentImage(url)
                               toast.success("Proof of payment uploaded.")
                             } catch (err) {
                               console.error(err)
@@ -2148,17 +2167,17 @@ export default function Home() {
                           className="hidden"
                         />
                       </label>
-                      {proofOfPaymentUrl ? (
+                      {proofOfPaymentImage ? (
                         <div className="mt-3 space-y-2">
                           <div className="group relative overflow-hidden rounded-lg border border-emerald-200 bg-white shadow-sm">
                             <button
                               type="button"
-                              onClick={() => setPreviewImage(proofOfPaymentUrl)}
+                              onClick={() => setPreviewImage(proofOfPaymentImage)}
                               className="block h-44 w-full focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:ring-offset-2"
                               aria-label="View proof of payment full screen"
                             >
                               <img
-                                src={proofOfPaymentUrl}
+                                src={proofOfPaymentImage}
                                 alt="Proof of payment"
                                 className="h-44 w-full cursor-pointer object-cover transition hover:opacity-95"
                               />
@@ -2184,20 +2203,25 @@ export default function Home() {
                       >
                         <span className="flex items-center gap-2 text-emerald-900">
                           <Upload className="h-4 w-4" />
-                          <span className="font-semibold">{validIdUrl ? "Replace ID" : "Upload valid ID"}</span>
+                          <span className="font-semibold">{validIdImage ? "Replace ID" : "Upload valid ID"}</span>
                         </span>
-                        <span className="text-xs text-gray-500">{validIdUrl ? "Uploaded" : "PNG/JPG"}</span>
+                        <span className="text-xs text-gray-500">{validIdImage ? "Uploaded" : "PNG/JPG"}</span>
                         <input
                           type="file"
-                          accept="image/*"
+                          accept="image/png,image/jpeg"
                           disabled={uploadingId}
                           onChange={async (e) => {
                             const f = e.target.files?.[0]
                             if (!f) return
+                            if (!["image/png", "image/jpeg"].includes(f.type)) {
+                              toast.error("Choose a PNG or JPG image.")
+                              e.target.value = ""
+                              return
+                            }
                             setUploadingId(true)
                             try {
                               const url = await uploadGuestFile(f)
-                              setValidIdUrl(url)
+                              setValidIdImage(url)
                               toast.success("Valid ID uploaded.")
                             } catch (err) {
                               console.error(err)
@@ -2210,17 +2234,17 @@ export default function Home() {
                           className="hidden"
                         />
                       </label>
-                      {validIdUrl ? (
+                      {validIdImage ? (
                         <div className="mt-3 space-y-2">
                           <div className="group relative overflow-hidden rounded-lg border border-emerald-200 bg-white shadow-sm">
                             <button
                               type="button"
-                              onClick={() => setPreviewImage(validIdUrl)}
+                              onClick={() => setPreviewImage(validIdImage)}
                               className="block h-44 w-full focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:ring-offset-2"
                               aria-label="View valid ID full screen"
                             >
                               <img
-                                src={validIdUrl}
+                                src={validIdImage}
                                 alt="Valid ID"
                                 className="h-44 w-full cursor-pointer object-cover transition hover:opacity-95"
                               />
@@ -2265,7 +2289,7 @@ export default function Home() {
                   disabled={
                     bookingSubmitting ||
                     (Boolean(process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY) && !recaptchaToken) ||
-                    (paymentRequired && (!paymentQrUrl || !proofOfPaymentUrl || !validIdUrl)) ||
+                    (paymentRequired && (!paymentQrUrl || !proofOfPaymentImage || !validIdImage)) ||
                     (formData.roomType && formData.checkIn && formData.checkOut && !dateAvailability.available)
                   }
                   className="mt-2 w-full rounded-xl bg-emerald-700 py-3.5 font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
@@ -2276,8 +2300,8 @@ export default function Home() {
             {paymentRequired && (
               <div className="mt-5 space-y-1.5 text-xs text-gray-500">
                 {!paymentQrUrl && <p>• Waiting for admin to upload a GCash QR code.</p>}
-                {!proofOfPaymentUrl && <p>• Upload your proof of payment.</p>}
-                {!validIdUrl && <p>• Upload 1 valid ID.</p>}
+                {!proofOfPaymentImage && <p>• Upload your proof of payment.</p>}
+                {!validIdImage && <p>• Upload 1 valid ID.</p>}
               </div>
             )}
               </>
