@@ -1101,7 +1101,13 @@ export default function AdminPage() {
         </div>
       </div>
           {currentPage === "dashboard" && (
-            <AdminOverview isLegacyHelpdesk={isLegacyHelpdesk} ownerUid={tenantOwnerUid} />
+            <AdminOverview
+              isLegacyHelpdesk={isLegacyHelpdesk}
+              ownerUid={tenantOwnerUid}
+              rooms={rooms}
+              roomsLoading={roomsLoading}
+              roomsError={roomsError}
+            />
           )}
 
           {currentPage === "manage-rooms" && (
