@@ -115,6 +115,7 @@ pnpm dev
 - **Contact Messages**: View and manage contact inquiries
 - **Feedback**: Publish/hide guest feedback
 - **Brand Settings**: Customize branding and contact info
+- **Payments**: Review payments, download booking invoices, export an Excel-compatible payment report, and review payment history
 
 ### Rooms
 Room documents are stored in the Firestore `rooms` collection. Each room uses these fields:
@@ -155,6 +156,10 @@ Booking documents are stored in the Firestore `guestbooking` collection and are 
 | `nights`, `pricePerNight`, `totalPrice` | number | Server-calculated stay and price snapshot |
 | `status` | string | `Pending`, `Approved`, `Declined`, `Cancelled`, or `Completed` |
 | `paymentStatus` | string | `unpaid`, `proof_submitted`, `paid`, or `rejected` |
+| `paymentMethod` | string | `gcash` or `cash` when a payment is recorded |
+| `paymentAmount` | number | Amount recorded as paid |
+| `paymentSource` | string | `walk-in` for walk-in bookings created in Payment management |
+| `paymentReviewedAt`, `paymentReviewedBy` | timestamp, string | When and by whom the payment was recorded or reviewed |
 | `ownerUid` | string | Resort owner's Firebase Auth UID; omitted for legacy marketplace bookings |
 | `proofOfPaymentImage` | string | Compressed payment-proof image data URL |
 | `validIdImage` | string | Compressed guest-ID data URL; readable only by the owning resort |
@@ -172,7 +177,9 @@ The resort owner document `resortOwners/{ownerUid}` stores:
 | `gcashQrImage` | string | Compressed embedded PNG/JPG data URL; kept below 500 KB |
 | `paymentInstructions` | string | Optional instructions displayed on the guest booking form |
 
-Guests on an owner-specific booking site upload payment proof and one valid ID before requesting the email OTP. The booking starts with `paymentStatus: proof_submitted`; the owning resort verifies it and marks it `paid` or `rejected`. The public booking form receives only the QR image and payment instructions. Valid IDs are only returned to the matching resort owner and are deleted when a booking is completed.
+Guests on an owner-specific booking site upload payment proof and one valid ID before requesting the email OTP. The booking starts with `paymentStatus: proof_submitted`; the owning resort verifies it and marks it `paid` or `rejected`. In Admin → Payments, an owner can also record cash received for an existing booking or create an approved, fully paid walk-in booking. Walk-in dates are checked and locked against other bookings, and the total is calculated from the room's saved price and discount. The public booking form receives only the QR image and payment instructions. Valid IDs are only returned to the matching resort owner and are deleted when a booking is completed.
+
+Payment proof submissions, GCash reviews, cash receipts, and walk-in payments are appended to the server-only `paymentHistory` collection. The Payments tab can download an invoice PDF per booking and export payment history as a UTF-8 CSV that opens in Excel. Firestore client access to payment history is denied; the authenticated server API scopes records to the signed-in resort owner.
 
 ### PWA Features
 - Offline support with service worker

@@ -38,10 +38,11 @@ export async function POST(request) {
 
     const status = String(booking.status || "Pending")
     const paymentStatus = String(booking.paymentStatus || "unpaid")
+    const paymentMethod = String(booking.paymentMethod || "gcash")
     const message =
       type === "payment"
         ? {
-            paid: `Your GCash payment for booking ${bookingId} has been verified.`,
+            paid: `Your ${paymentMethod === "cash" ? "cash payment" : "GCash payment"} for booking ${bookingId} has been recorded as paid.`,
             rejected: `Your payment proof for booking ${bookingId} could not be verified. Please contact the resort for assistance.`,
           }[paymentStatus]
         : {

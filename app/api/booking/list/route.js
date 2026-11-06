@@ -16,7 +16,9 @@ export async function GET(request) {
     const snapshot = user.isLegacyAdmin
       ? await db.collection("guestbooking").limit(1000).get()
       : await db.collection("guestbooking").where("ownerUid", "==", user.uid).limit(1000).get()
-    const history = new URL(request.url).searchParams.get("history") === "true"
+    const params = new URL(request.url).searchParams
+    const history = params.get("history") === "true"
+    const payments = params.get("payments") === "true"
     const bookings = snapshot.docs
       .map((item) => ({ id: item.id, ...item.data() }))
       .filter((booking) =>
@@ -25,9 +27,11 @@ export async function GET(request) {
           : booking.ownerUid === user.uid,
       )
       .filter((booking) =>
-        history
-          ? ["Completed", "Declined", "Cancelled"].includes(String(booking.status || ""))
-          : !["Completed", "Declined", "Cancelled"].includes(String(booking.status || "")),
+        payments
+          ? true
+          : history
+            ? ["Completed", "Declined", "Cancelled"].includes(String(booking.status || ""))
+            : !["Completed", "Declined", "Cancelled"].includes(String(booking.status || "")),
       )
       .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0))
       .map((booking) => {
@@ -47,6 +51,7 @@ export async function GET(request) {
           hasValidId: isOwner && booking.status !== "Completed" && Boolean(validIdImage || validIdUrl),
           createdAt: booking.createdAt?.toDate?.().toISOString() || null,
           updatedAt: booking.updatedAt?.toDate?.().toISOString() || null,
+          paymentReviewedAt: booking.paymentReviewedAt?.toDate?.().toISOString() || null,
         }
       })
     return Response.json({ bookings })

@@ -8,6 +8,7 @@ import {
   compressImageFileToDataUrl,
 } from "@/lib/data-url-files"
 import { toast } from "sonner"
+import ManagePayments from "@/components/admin/manage-payments"
 
 export default function PaymentSettings({ tenantOwnerUid, isLegacyHelpdesk }) {
   const [ownerApproved, setOwnerApproved] = useState(false)
@@ -55,6 +56,7 @@ export default function PaymentSettings({ tenantOwnerUid, isLegacyHelpdesk }) {
       },
       (error) => {
         console.error("Failed to load legacy payment settings:", error)
+        setLegacySettingsLoaded(true)
       },
     )
 
@@ -128,10 +130,10 @@ export default function PaymentSettings({ tenantOwnerUid, isLegacyHelpdesk }) {
       <h1 className="mb-2 text-3xl font-bold text-foreground">Payments</h1>
       <p className="mb-8 max-w-2xl text-sm leading-relaxed text-muted-foreground">
         Accept payments manually through GCash. Guests upload payment proof and one valid ID before email OTP
-        confirmation; your resort verifies the payment in Manage Bookings.
+        confirmation; review guest payments and record cash in Payment management below.
       </p>
 
-      <div className="max-w-2xl space-y-6 rounded-xl border border-border bg-card p-6 shadow-lg">
+      <div className="max-w-3xl space-y-6 rounded-2xl border border-[#eee2d5] bg-white p-6 shadow-sm">
         {!ownerApproved && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
             Your resort account is not approved yet. Once approved, you can configure manual GCash payments.
@@ -199,6 +201,7 @@ export default function PaymentSettings({ tenantOwnerUid, isLegacyHelpdesk }) {
           </button>
         </div>
       </div>
+      <ManagePayments ownerUid={tenantOwnerUid} isLegacyHelpdesk={isLegacyHelpdesk} />
     </div>
   )
 }

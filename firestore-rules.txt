@@ -17,6 +17,9 @@ service cloud.firestore {
     match /bookingDateLocks/{lockId} {
       allow read, write: if false;
     }
+    match /paymentHistory/{paymentId} {
+      allow read, write: if false;
+    }
 
     // Owner documents contain private account data and payment settings.
     // Only the owner and authorized super admins may read them.
@@ -148,6 +151,7 @@ service cloud.firestore {
         "guestbooking",
         "bookingOtpChallenges",
         "bookingDateLocks",
+        "paymentHistory",
         "resortOwners"
       ]) && request.auth != null;
     }

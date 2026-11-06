@@ -112,6 +112,7 @@ export async function POST(request) {
       return Response.json({ error: "The selected room price is too large to process." }, { status: 409 })
     }
     const bookingRef = db.collection("guestbooking").doc()
+    const paymentHistoryRef = ownerUid ? db.collection("paymentHistory").doc() : null
     const roomKey = getRoomKey(ownerUid, roomType)
     const legacyUid = await getLegacyRoomOwnerUid(db)
     const lockRefs = stayDates.map((date) =>
@@ -179,6 +180,22 @@ export async function POST(request) {
 
       transaction.delete(otpResult.ref)
       transaction.create(bookingRef, bookingData)
+      if (paymentHistoryRef) {
+        transaction.create(paymentHistoryRef, {
+          ownerUid,
+          bookingId: bookingRef.id,
+          guestName: name,
+          roomType,
+          checkIn,
+          checkOut,
+          action: "proof-submitted",
+          paymentStatus: "proof_submitted",
+          paymentMethod: "gcash",
+          amount: totalPrice,
+          recordedBy: "guest",
+          createdAt: new Date(),
+        })
+      }
       lockRefs.forEach((ref, index) => {
         transaction.create(ref, {
           roomKey,
