@@ -1,12 +1,12 @@
 # Resort Booking System
 
-A modern, full-featured resort booking management system built with Next.js, Firebase, and PayMongo integration.
+A modern, full-featured resort booking management system built with Next.js and Firebase.
 
 ## Features
 
 - 🏨 **Room Management** - Add, edit, and manage resort rooms with pricing
 - 📅 **Booking System** - Real-time booking with date availability checking
-- 💳 **Payment Integration** - PayMongo payment gateway integration
+- 💳 **Manual GCash Payments** - Resort QR payments with owner verification
 - 📧 **Email Notifications** - Automated email notifications for bookings
 - 👤 **Admin Dashboard** - Comprehensive admin panel for managing bookings, rooms, and settings
 - 📱 **PWA Support** - Progressive Web App with offline functionality
@@ -20,7 +20,7 @@ A modern, full-featured resort booking management system built with Next.js, Fir
 - **Framework**: Next.js 14
 - **Database**: Firebase Firestore
 - **Authentication**: Firebase Auth
-- **Payment**: PayMongo API
+- **Payment**: Manual GCash QR
 - **Email**: Nodemailer (Gmail)
 - **UI Components**: Custom components with Tailwind CSS
 - **PWA**: Service Worker with offline support
@@ -32,7 +32,6 @@ A modern, full-featured resort booking management system built with Next.js, Fir
 - Node.js 18+ and npm/pnpm
 - Firebase project with Firestore enabled
 - Gmail account for email service
-- PayMongo account (for payment integration)
 
 ### Installation
 
@@ -67,11 +66,6 @@ EMAIL_PASSWORD=your_16_char_app_password
 # Optional: Reply-To / internal copies (defaults to EMAIL_USER)
 # EMAIL_REPLY_TO=frontdesk@example.com
 ADMIN_EMAIL=admin@example.com
-
-# PayMongo
-PAYMONGO_SECRET_KEY=your_paymongo_secret_key
-PAYMONGO_PUBLIC_KEY=your_paymongo_public_key
-NEXT_PUBLIC_PAYMONGO_PUBLIC_KEY=your_paymongo_public_key
 
 # reCAPTCHA
 NEXT_PUBLIC_RECAPTCHA_SITE_KEY=your_recaptcha_site_key
@@ -160,17 +154,25 @@ Booking documents are stored in the Firestore `guestbooking` collection and are 
 | `specialRequests` | string | Optional guest notes |
 | `nights`, `pricePerNight`, `totalPrice` | number | Server-calculated stay and price snapshot |
 | `status` | string | `Pending`, `Approved`, `Declined`, `Cancelled`, or `Completed` |
-| `paymentStatus` | string | Payment workflow status |
+| `paymentStatus` | string | `unpaid`, `proof_submitted`, `paid`, or `rejected` |
 | `ownerUid` | string | Resort owner's Firebase Auth UID; omitted for legacy marketplace bookings |
-| `proofOfPaymentUrl`, `validIdUrl` | string | Optional resort-booking proof/ID image data URLs |
+| `proofOfPaymentImage` | string | Compressed payment-proof image data URL |
+| `validIdImage` | string | Compressed guest-ID data URL; readable only by the owning resort |
 | `createdAt`, `updatedAt` | Firestore timestamp | Server-generated timestamps |
 
-Availability locks and OTP challenges are stored in server-only collections. Client Firestore access to booking data is denied; booking and admin APIs use the Firebase Admin SDK. Configure `FIREBASE_SERVICE_ACCOUNT_JSON` and a random `OTP_SECRET` on the server. Configure `NEXT_PUBLIC_RECAPTCHA_SITE_KEY` and `RECAPTCHA_SECRET_KEY` for reCAPTCHA.
+Availability locks and OTP challenges are stored in server-only collections. Firestore rules let only the matching resort owner read its booking documents; public booking pages cannot read bookings or guest uploads. Booking creation and mutations use the Firebase Admin SDK. Configure `FIREBASE_SERVICE_ACCOUNT_JSON` and a random `OTP_SECRET` on the server. Configure `NEXT_PUBLIC_RECAPTCHA_SITE_KEY` and `RECAPTCHA_SECRET_KEY` for reCAPTCHA.
 
-### Payment Integration
-- PayMongo payment links generated for approved bookings
-- Webhook integration for payment status updates
-- Automatic booking status updates on payment completion
+### Manual GCash Payments
+Payment is manual; the project does not use a payment gateway, API key, or webhook.
+
+The resort owner document `resortOwners/{ownerUid}` stores:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `gcashQrImage` | string | Compressed embedded PNG/JPG data URL; kept below 500 KB |
+| `paymentInstructions` | string | Optional instructions displayed on the guest booking form |
+
+Guests on an owner-specific booking site upload payment proof and one valid ID before requesting the email OTP. The booking starts with `paymentStatus: proof_submitted`; the owning resort verifies it and marks it `paid` or `rejected`. The public booking form receives only the QR image and payment instructions. Valid IDs are only returned to the matching resort owner and are deleted when a booking is completed.
 
 ### PWA Features
 - Offline support with service worker
