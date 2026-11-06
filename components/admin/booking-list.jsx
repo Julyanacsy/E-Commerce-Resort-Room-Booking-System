@@ -24,6 +24,7 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [busyBookingId, setBusyBookingId] = useState("")
+  const [imagePreview, setImagePreview] = useState(null)
 
   const loadBookings = useCallback(async () => {
     setLoading(true)
@@ -95,6 +96,67 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
     }
   }
 
+  const viewBookingImage = async (booking, type) => {
+    setBusyBookingId(booking.id)
+    try {
+      const params = new URLSearchParams({ bookingId: booking.id, type })
+      const result = await bookingAdminRequest(`/api/booking/private-image?${params}`)
+      setImagePreview({
+        src: result.image,
+        title: type === "id" ? "Guest valid ID" : "Proof of payment",
+      })
+    } catch (imageError) {
+      console.error("Failed to load booking image:", imageError)
+      toast.error(imageError.message || "Booking image could not be loaded.")
+    } finally {
+      setBusyBookingId("")
+    }
+  }
+
+  const updatePaymentStatus = async (booking, action) => {
+    setBusyBookingId(booking.id)
+    const paymentStatus = action === "mark-as-paid" ? "paid" : "rejected"
+    try {
+      await bookingAdminRequest("/api/booking/update-payment-status", {
+        method: "POST",
+        body: JSON.stringify({ bookingId: booking.id, action }),
+      })
+      setBookings((current) =>
+        current.map((item) => (item.id === booking.id ? { ...item, paymentStatus } : item)),
+      )
+      try {
+        await bookingAdminRequest("/api/booking/send-status-email", {
+          method: "POST",
+          body: JSON.stringify({ bookingId: booking.id, type: "payment" }),
+        })
+        toast.success(`Payment ${paymentStatus === "paid" ? "verified" : "rejected"} and guest notified.`)
+      } catch (emailError) {
+        toast.error(`Payment updated, but email failed: ${emailError.message}`)
+      }
+    } catch (updateError) {
+      console.error("Failed to update payment status:", updateError)
+      toast.error(updateError.message || "Payment status could not be updated.")
+    } finally {
+      setBusyBookingId("")
+    }
+  }
+
+  const resendPaymentEmail = async (booking) => {
+    setBusyBookingId(booking.id)
+    try {
+      await bookingAdminRequest("/api/booking/send-status-email", {
+        method: "POST",
+        body: JSON.stringify({ bookingId: booking.id, type: "payment" }),
+      })
+      toast.success("Payment update email sent.")
+    } catch (emailError) {
+      console.error("Failed to resend payment email:", emailError)
+      toast.error(emailError.message || "Payment email could not be sent.")
+    } finally {
+      setBusyBookingId("")
+    }
+  }
+
   return (
     <section className="space-y-6 p-2 sm:p-6">
       <header className="flex flex-wrap items-end justify-between gap-3">
@@ -150,18 +212,55 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
               {booking.specialRequests ? (
                 <p className="mt-3 whitespace-pre-wrap text-sm text-foreground"><strong>Requests:</strong> {booking.specialRequests}</p>
               ) : null}
-              {booking.proofOfPaymentUrl || booking.validIdUrl ? (
+              {booking.hasProofOfPayment || booking.hasValidId ? (
                 <div className="mt-4 flex flex-wrap gap-4">
-                  {booking.proofOfPaymentUrl ? (
-                    <a href={booking.proofOfPaymentUrl} target="_blank" rel="noreferrer" className="text-sm font-medium text-primary underline">View proof of payment</a>
+                  {booking.hasProofOfPayment ? (
+                    <button
+                      type="button"
+                      disabled={busyBookingId === booking.id}
+                      onClick={() => viewBookingImage(booking, "proof")}
+                      className="text-sm font-medium text-primary underline disabled:opacity-60"
+                    >View proof of payment</button>
                   ) : null}
-                  {booking.validIdUrl ? (
-                    <a href={booking.validIdUrl} target="_blank" rel="noreferrer" className="text-sm font-medium text-primary underline">View guest ID</a>
+                  {booking.hasValidId ? (
+                    <button
+                      type="button"
+                      disabled={busyBookingId === booking.id}
+                      onClick={() => viewBookingImage(booking, "id")}
+                      className="text-sm font-medium text-primary underline disabled:opacity-60"
+                    >View guest ID</button>
                   ) : null}
                 </div>
               ) : null}
 
               <div className="mt-5 flex flex-wrap gap-2">
+                {!history &&
+                !isLegacyHelpdesk &&
+                ownerUid &&
+                booking.paymentStatus === "proof_submitted" ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={busyBookingId === booking.id}
+                      onClick={() => updatePaymentStatus(booking, "mark-as-paid")}
+                      className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-60"
+                    >Mark as paid</button>
+                    <button
+                      type="button"
+                      disabled={busyBookingId === booking.id}
+                      onClick={() => updatePaymentStatus(booking, "reject")}
+                      className="rounded-lg border border-red-300 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
+                    >Reject payment</button>
+                  </>
+                ) : null}
+                {!history && ["paid", "rejected"].includes(booking.paymentStatus) ? (
+                  <button
+                    type="button"
+                    disabled={busyBookingId === booking.id}
+                    onClick={() => resendPaymentEmail(booking)}
+                    className="rounded-lg border border-border px-4 py-2 text-sm font-semibold text-foreground hover:bg-muted disabled:opacity-60"
+                  >Resend payment email</button>
+                ) : null}
                 {!history && booking.status === "Pending" ? (
                   <>
                     <button
@@ -197,6 +296,31 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
           ))}
         </div>
       )}
+
+      {imagePreview ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label={imagePreview.title}
+          onClick={() => setImagePreview(null)}
+        >
+          <div className="relative max-h-full max-w-5xl" onClick={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              onClick={() => setImagePreview(null)}
+              className="mb-3 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black"
+            >
+              Close
+            </button>
+            <img
+              src={imagePreview.src}
+              alt={imagePreview.title}
+              className="max-h-[80vh] max-w-full rounded-lg bg-white object-contain"
+            />
+          </div>
+        </div>
+      ) : null}
     </section>
   )
 }

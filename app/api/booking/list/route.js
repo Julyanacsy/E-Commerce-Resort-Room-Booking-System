@@ -30,11 +30,25 @@ export async function GET(request) {
           : !["Completed", "Declined", "Cancelled"].includes(String(booking.status || "")),
       )
       .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0))
-      .map((booking) => ({
-        ...booking,
-        createdAt: booking.createdAt?.toDate?.().toISOString() || null,
-        updatedAt: booking.updatedAt?.toDate?.().toISOString() || null,
-      }))
+      .map((booking) => {
+        const {
+          proofOfPaymentImage,
+          proofOfPaymentUrl,
+          validIdImage,
+          validIdUrl,
+          ...safeBooking
+        } = booking
+        const isOwner = booking.ownerUid === user.uid
+        const rawPaymentStatus = String(booking.paymentStatus || "unpaid")
+        return {
+          ...safeBooking,
+          paymentStatus: rawPaymentStatus === "submitted_for_review" ? "proof_submitted" : rawPaymentStatus,
+          hasProofOfPayment: isOwner && Boolean(proofOfPaymentImage || proofOfPaymentUrl),
+          hasValidId: isOwner && booking.status !== "Completed" && Boolean(validIdImage || validIdUrl),
+          createdAt: booking.createdAt?.toDate?.().toISOString() || null,
+          updatedAt: booking.updatedAt?.toDate?.().toISOString() || null,
+        }
+      })
     return Response.json({ bookings })
   } catch (error) {
     console.error("Failed to load bookings:", error)
