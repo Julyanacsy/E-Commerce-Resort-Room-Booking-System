@@ -36,6 +36,31 @@ function getLocalDate() {
   return local.toISOString().slice(0, 10)
 }
 
+function getManilaDateKey(value) {
+  if (!value) return ""
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return ""
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date)
+  const part = (type) => parts.find((item) => item.type === type)?.value || ""
+  return `${part("year")}-${part("month")}-${part("day")}`
+}
+
+function getCurrentManilaMonth() {
+  return getManilaDateKey(new Date()).slice(0, 7)
+}
+
+const PAYMENT_RECEIPT_ACTIONS = new Set([
+  "mark-as-paid",
+  "cash-recorded",
+  "walk-in-cash-recorded",
+  "payment-recorded",
+])
+
 export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
   const [bookings, setBookings] = useState([])
   const [paymentEvents, setPaymentEvents] = useState([])
@@ -48,6 +73,9 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
   const [busyBookingId, setBusyBookingId] = useState("")
   const [filter, setFilter] = useState("all")
   const [activeView, setActiveView] = useState("payments")
+  const [historyStartDate, setHistoryStartDate] = useState("")
+  const [historyEndDate, setHistoryEndDate] = useState("")
+  const [summaryMonth, setSummaryMonth] = useState(getCurrentManilaMonth)
   const [imagePreview, setImagePreview] = useState(null)
   const [walkInSaving, setWalkInSaving] = useState(false)
   const [walkIn, setWalkIn] = useState({
@@ -162,6 +190,38 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
     return records.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
   }, [bookings, paymentEvents])
 
+  const filteredHistoryRecords = useMemo(
+    () =>
+      historyRecords.filter((record) => {
+        const date = getManilaDateKey(record.createdAt)
+        return (
+          date &&
+          (!historyStartDate || date >= historyStartDate) &&
+          (!historyEndDate || date <= historyEndDate)
+        )
+      }),
+    [historyEndDate, historyRecords, historyStartDate],
+  )
+
+  const monthlyPaymentSummary = useMemo(() => {
+    const records = historyRecords.filter(
+      (record) =>
+        record.paymentStatus === "paid" &&
+        PAYMENT_RECEIPT_ACTIONS.has(record.action) &&
+        getManilaDateKey(record.createdAt).startsWith(summaryMonth),
+    )
+    return {
+      total: records.reduce((sum, record) => sum + Number(record.amount || 0), 0),
+      count: records.length,
+      gcash: records
+        .filter((record) => record.paymentMethod === "gcash")
+        .reduce((sum, record) => sum + Number(record.amount || 0), 0),
+      cash: records
+        .filter((record) => record.paymentMethod === "cash")
+        .reduce((sum, record) => sum + Number(record.amount || 0), 0),
+    }
+  }, [historyRecords, summaryMonth])
+
   const downloadInvoice = async (booking) => {
     const user = auth?.currentUser
     if (!user) {
@@ -202,13 +262,13 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
   }
 
   const exportPaymentHistory = () => {
-    if (!historyRecords.length) {
+    if (!filteredHistoryRecords.length) {
       toast.error("There is no payment history to export.")
       return
     }
     const rows = [
       ["Date", "Guest", "Booking reference", "Room", "Check-in", "Check-out", "Action", "Payment status", "Method", "Amount"],
-      ...historyRecords.map((record) => [
+      ...filteredHistoryRecords.map((record) => [
         formatDate(record.createdAt),
         record.guestName,
         record.bookingId,
@@ -231,7 +291,7 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
     const url = URL.createObjectURL(blob)
     const link = document.createElement("a")
     link.href = url
-    link.download = `payment-history-${getLocalDate()}.csv`
+    link.download = `payment-history-${historyStartDate || "all"}-to-${historyEndDate || getLocalDate()}.csv`
     document.body.appendChild(link)
     link.click()
     link.remove()
@@ -378,7 +438,7 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
           <button
             type="button"
             onClick={exportPaymentHistory}
-            disabled={historyLoading || historyRecords.length === 0}
+            disabled={historyLoading || filteredHistoryRecords.length === 0}
             className="inline-flex items-center gap-2 rounded-xl bg-[#00634b] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#004f3b] disabled:cursor-not-allowed disabled:opacity-60"
           >
             <FileSpreadsheet className="h-4 w-4" />
@@ -694,32 +754,113 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
             <p className="rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-red-700" role="alert">
               {historyError}
             </p>
-          ) : historyRecords.length === 0 ? (
-            <p className="rounded-2xl border border-[#eee2d5] bg-white p-6 text-sm text-[#66736a]">
-              No payment activity has been recorded yet.
-            </p>
           ) : (
-            <div className="overflow-hidden rounded-2xl border border-[#eee2d5] bg-white shadow-sm">
-              <div className="hidden grid-cols-[1.2fr_1.2fr_1.3fr_1fr_1fr] gap-4 bg-[#f7f2eb] px-5 py-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#66736a] md:grid">
-                <span>Date</span><span>Guest</span><span>Activity</span><span>Method</span><span className="text-right">Amount</span>
+            <div className="space-y-4">
+              <section className="space-y-4 rounded-2xl border border-[#dbe7dc] bg-[#f4f8f2] p-5">
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#66736a]">Monthly summary</p>
+                    <p className="mt-1 text-sm text-[#66736a]">
+                      Paid transactions only; pending proofs and rejected payments are excluded.
+                    </p>
+                  </div>
+                  <label className="text-sm font-semibold text-[#18271e]">
+                    Month
+                    <input
+                      type="month"
+                      value={summaryMonth}
+                      onChange={(event) => setSummaryMonth(event.target.value || getCurrentManilaMonth())}
+                      className="ml-2 rounded-lg border border-[#d9e3dc] bg-white px-3 py-2"
+                    />
+                  </label>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded-xl border border-[#e4eadf] bg-white p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#7b817a]">Total received</p>
+                    <p className="mt-2 text-xl font-bold text-[#14583f]">{formatMoney(monthlyPaymentSummary.total)}</p>
+                  </div>
+                  <div className="rounded-xl border border-[#e4eadf] bg-white p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#7b817a]">Transactions</p>
+                    <p className="mt-2 text-xl font-bold text-[#18271e]">{monthlyPaymentSummary.count}</p>
+                  </div>
+                  <div className="rounded-xl border border-[#e4eadf] bg-white p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#7b817a]">GCash received</p>
+                    <p className="mt-2 text-xl font-bold text-[#14583f]">{formatMoney(monthlyPaymentSummary.gcash)}</p>
+                  </div>
+                  <div className="rounded-xl border border-[#e4eadf] bg-white p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#7b817a]">Cash received</p>
+                    <p className="mt-2 text-xl font-bold text-[#14583f]">{formatMoney(monthlyPaymentSummary.cash)}</p>
+                  </div>
+                </div>
+              </section>
+
+              <div className="flex flex-wrap items-end gap-3 rounded-2xl border border-[#eee2d5] bg-white p-4">
+                <label className="text-sm font-semibold text-[#18271e]">
+                  From
+                  <input
+                    type="date"
+                    value={historyStartDate}
+                    max={historyEndDate || undefined}
+                    onChange={(event) => setHistoryStartDate(event.target.value)}
+                    className="mt-1 block rounded-lg border border-[#e6ded2] bg-[#fffaf5] px-3 py-2"
+                  />
+                </label>
+                <label className="text-sm font-semibold text-[#18271e]">
+                  To
+                  <input
+                    type="date"
+                    value={historyEndDate}
+                    min={historyStartDate || undefined}
+                    onChange={(event) => setHistoryEndDate(event.target.value)}
+                    className="mt-1 block rounded-lg border border-[#e6ded2] bg-[#fffaf5] px-3 py-2"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHistoryStartDate("")
+                    setHistoryEndDate("")
+                  }}
+                  disabled={!historyStartDate && !historyEndDate}
+                  className="rounded-xl border border-[#d9e3dc] px-4 py-2.5 text-sm font-semibold text-[#14583f] hover:bg-[#f1f7f2] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Clear dates
+                </button>
+                <p className="ml-auto pb-2 text-sm text-[#66736a]">
+                  {filteredHistoryRecords.length} of {historyRecords.length} activities
+                </p>
               </div>
-              <div className="divide-y divide-[#eee2d5]">
-                {historyRecords.map((record) => (
-                  <article key={record.id} className="grid gap-2 px-5 py-4 text-sm md:grid-cols-[1.2fr_1.2fr_1.3fr_1fr_1fr] md:items-center md:gap-4">
-                    <div className="text-[#66736a]">{formatDate(record.createdAt)}</div>
-                    <div>
-                      <p className="font-semibold text-[#18271e]">{record.guestName || "Guest"}</p>
-                      <p className="text-xs text-[#7b817a]">{record.bookingId}</p>
-                    </div>
-                    <div>
-                      <p className="font-medium capitalize text-[#18271e]">{record.action.replaceAll("-", " ")}</p>
-                      <p className="text-xs capitalize text-[#7b817a]">{record.paymentStatus.replaceAll("_", " ")}</p>
-                    </div>
-                    <div className="capitalize text-[#526257]">{record.paymentMethod || "—"}</div>
-                    <div className="font-semibold text-[#14583f] md:text-right">{formatMoney(record.amount)}</div>
-                  </article>
-                ))}
-              </div>
+
+              {filteredHistoryRecords.length === 0 ? (
+                <p className="rounded-2xl border border-[#eee2d5] bg-white p-6 text-sm text-[#66736a]">
+                  {historyRecords.length === 0
+                    ? "No payment activity has been recorded yet."
+                    : "No payment activity matches the selected dates."}
+                </p>
+              ) : (
+                <div className="overflow-hidden rounded-2xl border border-[#eee2d5] bg-white shadow-sm">
+                  <div className="hidden grid-cols-[1.2fr_1.2fr_1.3fr_1fr_1fr] gap-4 bg-[#f7f2eb] px-5 py-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#66736a] md:grid">
+                    <span>Date</span><span>Guest</span><span>Activity</span><span>Method</span><span className="text-right">Amount</span>
+                  </div>
+                  <div className="divide-y divide-[#eee2d5]">
+                    {filteredHistoryRecords.map((record) => (
+                      <article key={record.id} className="grid gap-2 px-5 py-4 text-sm md:grid-cols-[1.2fr_1.2fr_1.3fr_1fr_1fr] md:items-center md:gap-4">
+                        <div className="text-[#66736a]">{formatDate(record.createdAt)}</div>
+                        <div>
+                          <p className="font-semibold text-[#18271e]">{record.guestName || "Guest"}</p>
+                          <p className="text-xs text-[#7b817a]">{record.bookingId}</p>
+                        </div>
+                        <div>
+                          <p className="font-medium capitalize text-[#18271e]">{record.action.replaceAll("-", " ")}</p>
+                          <p className="text-xs capitalize text-[#7b817a]">{record.paymentStatus.replaceAll("_", " ")}</p>
+                        </div>
+                        <div className="capitalize text-[#526257]">{record.paymentMethod || "—"}</div>
+                        <div className="font-semibold text-[#14583f] md:text-right">{formatMoney(record.amount)}</div>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </section>
