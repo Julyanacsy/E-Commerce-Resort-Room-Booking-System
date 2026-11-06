@@ -2,11 +2,12 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Guest bookings are created and managed by authenticated server APIs using Admin SDK.
+    // Only the owning resort may read its guest uploads. Mutations use server APIs.
     match /guestbooking/{bookingId} {
       allow create: if false;
-      allow read, update, delete: if request.auth != null
+      allow read: if request.auth != null
         && resource.data.get("ownerUid", "") == request.auth.uid;
+      allow update, delete: if false;
     }
 
     // OTP challenges and date locks are server-only records.
@@ -15,6 +16,40 @@ service cloud.firestore {
     }
     match /bookingDateLocks/{lockId} {
       allow read, write: if false;
+    }
+
+    // Owner documents contain private account data and payment settings.
+    // Only the owner and authorized super admins may read them.
+    match /resortOwners/{ownerId} {
+      function isSuperAdminEmail() {
+        return request.auth != null
+          && request.auth.token.email != null
+          && (request.auth.token.email == "ecommerceresortadmin@gmail.com"
+              || request.auth.token.email == "commerceresortadmin@gmail.com");
+      }
+
+      allow read: if request.auth != null
+        && (request.auth.uid == ownerId || isSuperAdminEmail());
+      allow create: if request.auth != null
+        && request.auth.uid == ownerId
+        && request.resource.data.uid == ownerId
+        && request.resource.data.get("status", "pending") == "pending";
+      allow update: if isSuperAdminEmail()
+        || (request.auth != null
+          && request.auth.uid == ownerId
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            "email",
+            "displayName",
+            "photoURL",
+            "createdAt",
+            "updatedAt",
+            "gcashQrImage",
+            "paymentInstructions"
+          ]));
+      allow delete: if isSuperAdminEmail();
     }
     
     // Rooms are public, but writes belong to the authenticated room owner.
@@ -112,7 +147,8 @@ service cloud.firestore {
         "rooms",
         "guestbooking",
         "bookingOtpChallenges",
-        "bookingDateLocks"
+        "bookingDateLocks",
+        "resortOwners"
       ]) && request.auth != null;
     }
   }

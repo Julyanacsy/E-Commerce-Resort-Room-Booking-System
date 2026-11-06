@@ -1,3 +1,4 @@
+import { FieldValue } from "firebase-admin/firestore"
 import {
   authenticateBookingAdmin,
   canManageBooking,
@@ -48,7 +49,16 @@ export async function POST(request) {
       if (!current.exists || current.get("status") !== body.currentStatus) {
         throw new Error("BOOKING_STATUS_CHANGED")
       }
-      transaction.update(bookingRef, { status, updatedAt: new Date() })
+      transaction.update(bookingRef, {
+        status,
+        ...(status === "Completed"
+          ? {
+              validIdImage: FieldValue.delete(),
+              validIdUrl: FieldValue.delete(),
+            }
+          : {}),
+        updatedAt: new Date(),
+      })
       if (lockRefs.length) lockRefs.forEach((ref) => transaction.delete(ref))
     })
 
