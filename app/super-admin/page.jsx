@@ -109,7 +109,7 @@ function MapsLinkActions({ mapsModalUrl }) {
   const url = String(mapsModalUrl || "").trim()
   if (!url) return null
   const btnBase =
-    "inline-flex min-h-[40px] w-full items-center justify-center rounded-full px-4 py-2 text-[11px] font-semibold uppercase tracking-wide transition sm:min-h-0 sm:w-auto sm:px-4 sm:py-2 sm:text-xs sm:tracking-[0.15em]"
+    "inline-flex min-h-10 w-full items-center justify-center rounded-full px-4 py-2 text-[11px] font-semibold uppercase tracking-wide transition sm:min-h-0 sm:w-auto sm:px-4 sm:py-2 sm:text-xs sm:tracking-[0.15em]"
   return (
     <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-stretch sm:justify-start sm:gap-2">
       <button
@@ -176,7 +176,7 @@ function SuperAdminOwnerProfile({ resort, ownerDoc, ownerProfilesReady, theme })
 
   return (
     <div className={`mt-3 flex gap-3 rounded-xl border p-3 ${wrapBorder}`}>
-      <div className={`relative h-12 w-12 flex-shrink-0 overflow-hidden rounded-full ${avatarBg}`}>
+      <div className={`relative h-12 w-12 shrink-0 overflow-hidden rounded-full ${avatarBg}`}>
         {photoURL ? (
           <img
             src={photoURL}
@@ -718,7 +718,7 @@ export default function SuperAdminPage() {
 
   if (!authed) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-[oklch(0.98_0.01_70)] to-white px-4 py-14">
+      <div className="min-h-screen bg-linear-to-b from-[oklch(0.98_0.01_70)] to-white px-4 py-14">
         <div className="mx-auto w-full max-w-md rounded-2xl border border-emerald-100 bg-white p-7 shadow-lg">
           <p className="text-xs font-semibold tracking-[0.35em] uppercase text-emerald-700/70">
             Super Admin
@@ -766,7 +766,7 @@ export default function SuperAdminPage() {
 
   if (!fireAuthUser) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-[oklch(0.98_0.01_70)] to-white px-4 py-14">
+      <div className="min-h-screen bg-linear-to-b from-[oklch(0.98_0.01_70)] to-white px-4 py-14">
         <div className="mx-auto w-full max-w-lg rounded-2xl border border-emerald-100 bg-white p-7 shadow-lg">
           <p className="text-xs font-semibold tracking-[0.35em] uppercase text-emerald-700/70">
             Super Admin
@@ -807,7 +807,7 @@ export default function SuperAdminPage() {
   const isAllowedSuperAdmin = isAllowedSuperAdminEmail(fireAuthUser?.email || "")
   if (!isAllowedSuperAdmin) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-[oklch(0.98_0.01_70)] to-white px-4 py-14">
+      <div className="min-h-screen bg-linear-to-b from-[oklch(0.98_0.01_70)] to-white px-4 py-14">
         <div className="mx-auto w-full max-w-lg rounded-2xl border border-emerald-100 bg-white p-7 shadow-lg">
           <p className="text-xs font-semibold tracking-[0.35em] uppercase text-emerald-700/70">
             Super Admin
@@ -867,8 +867,8 @@ export default function SuperAdminPage() {
       <div
         className={`flex h-screen transition-colors duration-300 ${
           theme === "dark"
-            ? "bg-gradient-to-b from-slate-900 to-slate-800"
-            : "bg-gradient-to-b from-slate-50 to-white"
+            ? "bg-linear-to-b from-slate-900 to-slate-800"
+            : "bg-linear-to-b from-slate-50 to-white"
         }`}
       >
         <aside
@@ -885,7 +885,7 @@ export default function SuperAdminPage() {
               theme === "dark" ? "border-slate-700" : "border-emerald-800"
             } ${sidebarExpanded ? "px-5" : "px-3 lg:px-3"}`}
           >
-            <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full border border-emerald-500/50 bg-white/10">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-emerald-500/50 bg-white/10">
               <LayoutDashboard className="h-6 w-6 text-emerald-200" aria-hidden />
             </div>
             <div
@@ -938,7 +938,7 @@ export default function SuperAdminPage() {
                         : "text-emerald-100 hover:bg-white/5 hover:text-white"
                   }`}
                 >
-                  <Icon size={18} className="flex-shrink-0" />
+                  <Icon size={18} className="shrink-0" />
                   <span
                     className={`truncate transition-all duration-300 ${
                       mobileSidebarVisible || sidebarExpanded ? "max-w-full opacity-100" : "max-w-0 opacity-0 lg:max-w-0 lg:opacity-0"
@@ -1001,7 +1001,7 @@ export default function SuperAdminPage() {
                 {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
               </span>
               {(mobileSidebarVisible || sidebarExpanded) && (
-                <span className="flex-shrink-0">{theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}</span>
+                <span className="shrink-0">{theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}</span>
               )}
             </button>
 
@@ -1100,7 +1100,7 @@ export default function SuperAdminPage() {
                             <select
                               value={resortListFilter}
                               onChange={(e) => setResortListFilter(e.target.value)}
-                              className={`min-w-[14rem] rounded-lg border px-3 py-2 text-sm font-medium outline-none ring-emerald-500/30 focus:ring-2 ${
+                              className={`min-w-56 rounded-lg border px-3 py-2 text-sm font-medium outline-none ring-emerald-500/30 focus:ring-2 ${
                                 theme === "dark"
                                   ? "border-slate-600 bg-slate-900 text-white"
                                   : "border-emerald-200 bg-white text-emerald-900"
@@ -1178,7 +1178,7 @@ export default function SuperAdminPage() {
                               </div>
                             </div>
 
-                            <div className="flex flex-shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-center">
+                            <div className="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-center">
                               {(String(r.status || "pending").toLowerCase() === "pending" ? (
                                 <>
                                   <button
@@ -1304,13 +1304,13 @@ export default function SuperAdminPage() {
                               <td className="py-3 pr-3 align-top text-xs">
                                 <p className={subText}>{row.actorEmail || "—"}</p>
                                 {row.actorUid && (
-                                  <p className="mt-0.5 max-w-[12rem] truncate font-mono text-[10px] text-muted-foreground">
+                                  <p className="mt-0.5 max-w-48 truncate font-mono text-[10px] text-muted-foreground">
                                     {row.actorUid}
                                   </p>
                                 )}
                               </td>
                               <td className="py-3 align-top text-xs text-muted-foreground">
-                                {row.reason ? <span className="whitespace-pre-wrap break-words">{row.reason}</span> : "—"}
+                                {row.reason ? <span className="whitespace-pre-wrap wrap-break-word">{row.reason}</span> : "—"}
                               </td>
                             </tr>
                           )
@@ -1621,7 +1621,7 @@ export default function SuperAdminPage() {
 
       {resortActionModal && (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-60 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
           onClick={(e) => {
             if (e.target === e.currentTarget) closeResortActionModal()
           }}
@@ -1769,7 +1769,7 @@ export default function SuperAdminPage() {
                     <iframe
                       title="Resort map preview"
                       src={mapsPreviewSrc}
-                      className="aspect-[5/4] max-h-[38vh] w-full min-h-[180px] sm:aspect-auto sm:h-[min(36vh,320px)] sm:max-h-[340px] md:h-[min(38vh,360px)]"
+                      className="aspect-5/4 max-h-[38vh] w-full min-h-[180px] sm:aspect-auto sm:h-[min(36vh,320px)] sm:max-h-[340px] md:h-[min(38vh,360px)]"
                       loading="lazy"
                       referrerPolicy="no-referrer-when-downgrade"
                     />
@@ -1830,7 +1830,7 @@ export default function SuperAdminPage() {
                           toast.error("Failed to copy link.")
                         }
                       }}
-                      className="w-full min-h-[40px] rounded-full bg-emerald-700 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-white transition hover:bg-emerald-600 sm:w-fit sm:px-5 sm:text-xs sm:tracking-[0.15em]"
+                      className="w-full min-h-10 rounded-full bg-emerald-700 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-white transition hover:bg-emerald-600 sm:w-fit sm:px-5 sm:text-xs sm:tracking-[0.15em]"
                     >
                       Copy link
                     </button>
@@ -1845,4 +1845,3 @@ export default function SuperAdminPage() {
     </>
   )
 }
-

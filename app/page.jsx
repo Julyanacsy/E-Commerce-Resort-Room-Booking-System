@@ -250,8 +250,8 @@ function RoomCard({ room, onViewDetails, onImageClick, theme = "light" }) {
             className={`flex-1 py-2.5 rounded-lg transition-all duration-200 font-semibold text-sm ${
               isAvailable
                 ? isDark
-                  ? "bg-gradient-to-r from-emerald-600 to-emerald-700 text-white hover:from-emerald-700 hover:to-emerald-800 shadow-md hover:shadow-lg transform hover:scale-105 cursor-pointer"
-                  : "bg-gradient-to-r from-emerald-600 to-emerald-700 text-white hover:from-emerald-700 hover:to-emerald-800 shadow-md hover:shadow-lg transform hover:scale-105 cursor-pointer"
+                  ? "bg-linear-to-r from-emerald-600 to-emerald-700 text-white hover:from-emerald-700 hover:to-emerald-800 shadow-md hover:shadow-lg transform hover:scale-105 cursor-pointer"
+                  : "bg-linear-to-r from-emerald-600 to-emerald-700 text-white hover:from-emerald-700 hover:to-emerald-800 shadow-md hover:shadow-lg transform hover:scale-105 cursor-pointer"
                 : isDark
                   ? "bg-slate-700 text-gray-500 cursor-not-allowed opacity-60"
                   : "bg-gray-300 text-gray-500 cursor-not-allowed opacity-60"
@@ -1097,8 +1097,8 @@ export default function Home() {
   return (
     <div className={`min-h-screen transition-colors ${
       theme === "dark"
-        ? "bg-gradient-to-b from-slate-900 to-slate-800"
-        : "bg-gradient-to-b from-slate-50 to-white"
+        ? "bg-linear-to-b from-slate-900 to-slate-800"
+        : "bg-linear-to-b from-slate-50 to-white"
     }`} style={{ scrollBehavior: "smooth" }}>
       <style jsx global>{`
         html {
@@ -1232,8 +1232,8 @@ export default function Home() {
           <div
             className={`absolute inset-0 ${
               theme === "dark"
-                ? "bg-gradient-to-r from-slate-800 to-slate-700"
-                : "bg-gradient-to-r from-emerald-700 to-emerald-600"
+                ? "bg-linear-to-r from-slate-800 to-slate-700"
+                : "bg-linear-to-r from-emerald-700 to-emerald-600"
             }`}
           />
         )}
@@ -1424,13 +1424,13 @@ export default function Home() {
 
                     {/* Image Section - Left side on desktop, top on mobile */}
                     {images.length > 0 ? (
-                      <div className="relative w-full h-64 lg:h-full lg:w-2/5 flex-shrink-0">
+                      <div className="relative w-full h-64 lg:h-full lg:w-2/5 shrink-0">
                         <img
                           src={images[0]}
                           alt={room.name}
                           className="w-full h-full object-cover"
                         />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent lg:bg-gradient-to-r lg:from-black/60 lg:via-black/20 lg:to-transparent" />
+                        <div className="absolute inset-0 bg-linear-to-t from-black/60 via-black/20 to-transparent lg:bg-linear-to-r lg:from-black/60 lg:via-black/20 lg:to-transparent" />
                         {room.featured && (
                           <span className="absolute top-4 left-4 bg-amber-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-lg">
                             ⭐ Featured
@@ -1438,7 +1438,7 @@ export default function Home() {
                         )}
                       </div>
                     ) : (
-                      <div className="relative w-full h-48 lg:h-full lg:w-2/5 flex-shrink-0 bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center">
+                      <div className="relative w-full h-48 lg:h-full lg:w-2/5 shrink-0 bg-linear-to-br from-emerald-500 to-emerald-700 flex items-center justify-center">
                         {room.featured && (
                           <span className="absolute top-4 left-4 bg-amber-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-lg">
                             ⭐ Featured
@@ -1470,7 +1470,7 @@ export default function Home() {
                           {/* Left Column */}
                           <div className="lg:flex lg:flex-col lg:justify-between">
                             {/* Price Section */}
-                            <section className="mb-4 lg:mb-0 space-y-2 rounded-xl border border-gray-100 p-4 bg-gradient-to-br from-amber-50 to-emerald-50">
+                            <section className="mb-4 lg:mb-0 space-y-2 rounded-xl border border-gray-100 p-4 bg-linear-to-br from-amber-50 to-emerald-50">
                               <h3 className="text-xs font-semibold uppercase tracking-[0.3em] text-gray-600">Pricing</h3>
                               <div className="flex items-baseline gap-2 flex-wrap">
                                 <span className="text-2xl lg:text-3xl font-bold text-amber-600">
@@ -1495,7 +1495,7 @@ export default function Home() {
                               <h3 className="text-xs font-semibold uppercase tracking-[0.3em] text-gray-600">Information</h3>
                               <div className="space-y-2">
                                 <div className="flex items-center gap-2 p-2 bg-emerald-50 rounded-lg">
-                                  <div className="bg-emerald-600 text-white rounded-full p-1.5 flex-shrink-0">
+                                  <div className="bg-emerald-600 text-white rounded-full p-1.5 shrink-0">
                                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
                                     </svg>
@@ -1506,7 +1506,7 @@ export default function Home() {
                                   </div>
                                 </div>
                                 <div className="flex items-center gap-2 p-2 bg-blue-50 rounded-lg">
-                                  <div className="bg-blue-600 text-white rounded-full p-1.5 flex-shrink-0">
+                                  <div className="bg-blue-600 text-white rounded-full p-1.5 shrink-0">
                                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                                     </svg>
@@ -1540,7 +1540,7 @@ export default function Home() {
                                       key={idx}
                                       className="flex items-center gap-1.5 p-1.5 bg-emerald-50 rounded-lg border border-emerald-100"
                                     >
-                                      <svg className="w-3 h-3 text-emerald-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <svg className="w-3 h-3 text-emerald-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                                       </svg>
                                       <span className="text-gray-700 font-medium text-xs truncate">{amenity}</span>
@@ -1609,7 +1609,7 @@ export default function Home() {
                       </div>
 
                       {/* Footer Actions */}
-                      <div className="border-t border-gray-100 bg-gray-50 p-4 lg:p-6 flex-shrink-0">
+                      <div className="border-t border-gray-100 bg-gray-50 p-4 lg:p-6 shrink-0">
                         <div className="flex flex-col sm:flex-row gap-2 lg:gap-3">
                   <button
                             onClick={() => {
@@ -2363,8 +2363,8 @@ export default function Home() {
             ).slice(0, 3).map((item, idx) => (
               <div key={idx} className={`rounded-2xl p-7 text-center md:p-8 ${
                 theme === "dark"
-                  ? "bg-gradient-to-br from-slate-800 to-slate-700"
-                  : "bg-gradient-to-br from-emerald-50 to-emerald-100"
+                  ? "bg-linear-to-br from-slate-800 to-slate-700"
+                  : "bg-linear-to-br from-emerald-50 to-emerald-100"
               }`}>
                 <h3 className={`text-xl font-bold mb-3 ${
                   theme === "dark" ? "text-emerald-400" : "text-emerald-700"
@@ -2645,7 +2645,7 @@ export default function Home() {
             {feedbacks.map((fb) => (
                     <div
                       key={fb.id}
-                      className="flex-shrink-0 w-full md:w-1/3 px-4"
+                      className="shrink-0 w-full md:w-1/3 px-4"
                       style={{ minWidth: "33.333%" }}
                     >
                       <div className={`p-6 rounded-lg shadow-md hover:shadow-xl transition-all duration-300 hover:scale-105 h-full ${
@@ -2692,8 +2692,8 @@ export default function Home() {
           <div
             className={`mx-auto mt-4 max-w-2xl rounded-2xl p-8 md:p-10 ${
               theme === "dark"
-                ? "bg-gradient-to-r from-slate-800 to-slate-700 ring-1 ring-slate-600/40"
-                : "bg-gradient-to-r from-emerald-50 to-emerald-100 ring-1 ring-emerald-100/80"
+                ? "bg-linear-to-r from-slate-800 to-slate-700 ring-1 ring-slate-600/40"
+                : "bg-linear-to-r from-emerald-50 to-emerald-100 ring-1 ring-emerald-100/80"
             }`}
           >
             <h3

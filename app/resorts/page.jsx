@@ -651,7 +651,7 @@ export default function ResortsMarketplacePage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-[oklch(0.98_0.01_70)] to-white">
+    <div className="min-h-screen bg-linear-to-b from-[oklch(0.98_0.01_70)] to-white">
       <DynamicHead brandingOverride={marketplaceHeadBranding} />
       <header className="sticky top-0 z-30 border-b border-emerald-100/60 bg-white/75 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-4">
@@ -812,7 +812,7 @@ export default function ResortsMarketplacePage() {
                       </p>
                     ) : null}
                   </div>
-                  <div className="flex flex-shrink-0 items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800">
+                  <div className="flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800">
                     <Star size={14} className="text-amber-600" />
                     {resort.rating.toFixed(1)}
                   </div>
@@ -899,7 +899,7 @@ export default function ResortsMarketplacePage() {
                     <img
                       src={joinUser.photoURL || "/icon.svg"}
                       alt="Signed in avatar"
-                      className="h-10 w-10 flex-shrink-0 rounded-full object-cover border border-emerald-100 bg-white"
+                      className="h-10 w-10 shrink-0 rounded-full object-cover border border-emerald-100 bg-white"
                       referrerPolicy="no-referrer"
                     />
                     <div className="min-w-0 leading-tight">
@@ -1135,7 +1135,7 @@ export default function ResortsMarketplacePage() {
               )}
             </div>
 
-            <div className="md:col-span-2 bg-gradient-to-br from-emerald-700 to-emerald-600 p-6 md:p-8 text-white">
+            <div className="md:col-span-2 bg-linear-to-br from-emerald-700 to-emerald-600 p-6 md:p-8 text-white">
               <p className="text-xs font-semibold tracking-[0.35em] uppercase text-white/80">
                 What you get
               </p>
@@ -1177,4 +1177,3 @@ export default function ResortsMarketplacePage() {
     </div>
   )
 }
-

@@ -831,7 +831,7 @@ export default function AdminPage() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-slate-50 to-white">
+      <div className="min-h-screen flex items-center justify-center bg-linear-to-b from-slate-50 to-white">
         <p className="text-gray-500 tracking-[0.2em] uppercase">Preparing portal…</p>
       </div>
     )
@@ -847,7 +847,7 @@ export default function AdminPage() {
           logo: marketplace?.navLogoUrl || "",
         }
     return (
-      <div className="min-h-screen flex items-center justify-center px-4 py-12 bg-gradient-to-b from-slate-50 to-white">
+      <div className="min-h-screen flex items-center justify-center px-4 py-12 bg-linear-to-b from-slate-50 to-white">
         <div className="max-w-md w-full">
           <div className="text-center mb-8">
             <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full border border-emerald-100 bg-white shadow-sm">
@@ -916,8 +916,8 @@ export default function AdminPage() {
         />
     <div className={`flex h-screen transition-colors duration-300 ${
       theme === "dark" 
-        ? "bg-gradient-to-b from-slate-900 to-slate-800" 
-        : "bg-gradient-to-b from-slate-50 to-white"
+        ? "bg-linear-to-b from-slate-900 to-slate-800"
+        : "bg-linear-to-b from-slate-50 to-white"
     }`}>
         <aside
           className={`fixed inset-y-0 left-0 z-40 flex h-full flex-col shadow-2xl transition-all duration-300 ease-in-out lg:static lg:shadow-none ${
@@ -937,7 +937,7 @@ export default function AdminPage() {
           } ${
             sidebarExpanded ? "px-5" : "px-3 lg:px-3"
           } py-6`}>
-            <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full border border-emerald-600 bg-white/10">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-emerald-600 bg-white/10">
               <BrandLogo className="h-9 w-9 rounded-full bg-white/10 text-white" />
         </div>
             <div
@@ -989,7 +989,7 @@ export default function AdminPage() {
                         : "text-emerald-100 hover:bg-white/5 hover:text-white"
                   }`}
                 >
-                  <Icon size={18} className="flex-shrink-0" />
+                  <Icon size={18} className="shrink-0" />
                   <span
                     className={`truncate transition-all duration-300 ${
                       (mobileSidebarVisible || sidebarExpanded)
@@ -1052,7 +1052,7 @@ export default function AdminPage() {
                 {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
               </span>
               {(mobileSidebarVisible || sidebarExpanded) && (
-                <span className="flex-shrink-0">
+                <span className="shrink-0">
                   {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
                 </span>
               )}
@@ -1574,7 +1574,7 @@ export default function AdminPage() {
                     <p className="text-sm font-semibold text-primary">Branding saved! Refresh the public site to verify.</p>
                   )}
                 </form>
-                <div className="rounded-xl border border-border bg-gradient-to-br from-primary to-primary/80 p-6 text-primary-foreground shadow-lg">
+                <div className="rounded-xl border border-border bg-linear-to-br from-primary to-primary/80 p-6 text-primary-foreground shadow-lg">
                   <p className="text-xs uppercase tracking-[0.35em] text-primary-foreground/80">Preview</p>
                   <div className="mt-6 flex items-center gap-4">
                     <div className="flex h-16 w-16 items-center justify-center rounded-full border border-primary-foreground/40 bg-primary-foreground/10">
