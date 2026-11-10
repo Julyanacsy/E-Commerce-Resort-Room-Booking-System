@@ -10,7 +10,7 @@ import {
 import { toast } from "sonner"
 import ManagePayments from "@/components/admin/manage-payments"
 
-export default function PaymentSettings({ tenantOwnerUid, isLegacyHelpdesk }) {
+export default function PaymentSettings({ tenantOwnerUid, isLegacyHelpdesk, staffRole = "owner" }) {
   const [ownerApproved, setOwnerApproved] = useState(false)
   const [qrImage, setQrImage] = useState("")
   const [instructions, setInstructions] = useState("")
@@ -20,7 +20,7 @@ export default function PaymentSettings({ tenantOwnerUid, isLegacyHelpdesk }) {
   const [instructionsSaving, setInstructionsSaving] = useState(false)
 
   useEffect(() => {
-    if (!db || !tenantOwnerUid || isLegacyHelpdesk) return undefined
+    if (!db || !tenantOwnerUid || isLegacyHelpdesk || staffRole !== "owner") return undefined
 
     let rootSettingsExist = false
     const ownerRef = doc(db, "resortOwners", tenantOwnerUid)
@@ -64,7 +64,7 @@ export default function PaymentSettings({ tenantOwnerUid, isLegacyHelpdesk }) {
       unsubscribeOwner()
       unsubscribeLegacy()
     }
-  }, [tenantOwnerUid, isLegacyHelpdesk])
+  }, [tenantOwnerUid, isLegacyHelpdesk, staffRole])
 
   if (isLegacyHelpdesk || !tenantOwnerUid) {
     return (
@@ -123,6 +123,10 @@ export default function PaymentSettings({ tenantOwnerUid, isLegacyHelpdesk }) {
       toast.error(error?.message || "GCash QR code could not be saved.")
       setQrUploading(false)
     }
+  }
+
+  if (tenantOwnerUid && staffRole !== "owner") {
+    return <ManagePayments ownerUid={tenantOwnerUid} isLegacyHelpdesk={false} staffRole={staffRole} />
   }
 
   return (
@@ -201,7 +205,7 @@ export default function PaymentSettings({ tenantOwnerUid, isLegacyHelpdesk }) {
           </button>
         </div>
       </div>
-      <ManagePayments ownerUid={tenantOwnerUid} isLegacyHelpdesk={isLegacyHelpdesk} />
+      <ManagePayments ownerUid={tenantOwnerUid} isLegacyHelpdesk={isLegacyHelpdesk} staffRole={staffRole} />
     </div>
   )
 }

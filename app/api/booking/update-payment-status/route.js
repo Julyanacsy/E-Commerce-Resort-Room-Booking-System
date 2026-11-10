@@ -1,6 +1,8 @@
 import {
   authenticateBookingAdmin,
   canManageBooking,
+  getPaymentActionError,
+  hasBookingPermission,
   getBookingDb,
   jsonFailure,
 } from "@/lib/booking-api-server"
@@ -31,6 +33,10 @@ export async function POST(request) {
   if (!bookingId || !nextPaymentStatus) {
     return jsonFailure("Booking and a valid payment action are required.", 400)
   }
+  const permission = action === "record-cash" ? "booking" : "payment"
+  if (!hasBookingPermission(authResult.user, permission)) {
+    return jsonFailure("Your staff role cannot update this payment.", 403)
+  }
 
   try {
     const bookingRef = db.collection("guestbooking").doc(bookingId)
@@ -40,29 +46,19 @@ export async function POST(request) {
     const booking = bookingSnapshot.data()
     if (
       !canManageBooking(authResult.user, booking) ||
-      booking.ownerUid !== authResult.user.uid
+      booking.ownerUid !== authResult.user.ownerUid
     ) {
-      return jsonFailure("Only this resort owner can verify payment.", 403)
-    }
-    if (!["Pending", "Approved"].includes(booking.status)) {
-      return jsonFailure("Payment cannot be reviewed for a closed booking.", 409)
+      return jsonFailure("You cannot update payment for this booking.", 403)
     }
     const currentPaymentStatus = String(booking.paymentStatus || "unpaid")
-    if (action === "record-cash") {
-      if (currentPaymentStatus === "paid") {
-        return jsonFailure("This booking is already marked as paid.", 409)
-      }
-    } else {
-      if (!["proof_submitted", "submitted_for_review"].includes(currentPaymentStatus)) {
-        return jsonFailure("This booking has no pending payment proof to review.", 409)
-      }
-      if (!booking.proofOfPaymentImage && !booking.proofOfPaymentUrl) {
-        return jsonFailure("Payment proof is missing.", 409)
-      }
-      if (action === "mark-as-paid" && !booking.validIdImage && !booking.validIdUrl) {
-        return jsonFailure("Guest ID is missing.", 409)
-      }
-    }
+    const paymentActionError = getPaymentActionError(
+      action,
+      currentPaymentStatus,
+      booking.status,
+      Boolean(booking.proofOfPaymentImage || booking.proofOfPaymentUrl),
+      Boolean(booking.validIdImage || booking.validIdUrl),
+    )
+    if (paymentActionError) return jsonFailure(paymentActionError, 409)
 
     await db.runTransaction(async (transaction) => {
       const current = await transaction.get(bookingRef)
@@ -70,12 +66,14 @@ export async function POST(request) {
       const status = String(current.get("paymentStatus") || "unpaid")
       const currentBookingStatus = current.get("status")
       if (
-        !["Pending", "Approved"].includes(currentBookingStatus) ||
-        current.get("ownerUid") !== authResult.user.uid ||
-        (action === "record-cash"
-          ? status === "paid"
-          : !["proof_submitted", "submitted_for_review"].includes(status) ||
-            (action === "mark-as-paid" && !current.get("validIdImage") && !current.get("validIdUrl")))
+        current.get("ownerUid") !== authResult.user.ownerUid ||
+        getPaymentActionError(
+          action,
+          status,
+          currentBookingStatus,
+          Boolean(current.get("proofOfPaymentImage") || current.get("proofOfPaymentUrl")),
+          Boolean(current.get("validIdImage") || current.get("validIdUrl")),
+        )
       ) {
         throw new Error("PAYMENT_REVIEW_CHANGED")
       }
@@ -85,10 +83,11 @@ export async function POST(request) {
         paymentAmount: Number(current.get("totalPrice") || 0),
         paymentReviewedAt: new Date(),
         paymentReviewedBy: authResult.user.uid,
+        paymentReviewedByEmail: authResult.user.email,
         updatedAt: new Date(),
       })
       transaction.create(historyRef, {
-        ownerUid: authResult.user.uid,
+        ownerUid: authResult.user.ownerUid,
         bookingId,
         guestName: String(current.get("name") || ""),
         roomType: String(current.get("roomType") || ""),
@@ -99,6 +98,7 @@ export async function POST(request) {
         paymentMethod: action === "record-cash" ? "cash" : "gcash",
         amount: Number(current.get("totalPrice") || 0),
         recordedBy: authResult.user.uid,
+        recordedByEmail: authResult.user.email,
         createdAt: new Date(),
       })
     })

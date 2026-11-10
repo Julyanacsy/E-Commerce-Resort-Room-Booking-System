@@ -61,7 +61,7 @@ const PAYMENT_RECEIPT_ACTIONS = new Set([
   "payment-recorded",
 ])
 
-export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
+export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole = "owner" }) {
   const [bookings, setBookings] = useState([])
   const [paymentEvents, setPaymentEvents] = useState([])
   const [rooms, setRooms] = useState([])
@@ -75,6 +75,8 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
   const [activeView, setActiveView] = useState("payments")
   const [historyStartDate, setHistoryStartDate] = useState("")
   const [historyEndDate, setHistoryEndDate] = useState("")
+  const [historyMethod, setHistoryMethod] = useState("all")
+  const [historyStatus, setHistoryStatus] = useState("all")
   const [summaryMonth, setSummaryMonth] = useState(getCurrentManilaMonth)
   const [imagePreview, setImagePreview] = useState(null)
   const [walkInSaving, setWalkInSaving] = useState(false)
@@ -197,10 +199,12 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
         return (
           date &&
           (!historyStartDate || date >= historyStartDate) &&
-          (!historyEndDate || date <= historyEndDate)
+          (!historyEndDate || date <= historyEndDate) &&
+          (historyMethod === "all" || record.paymentMethod === historyMethod) &&
+          (historyStatus === "all" || record.paymentStatus === historyStatus)
         )
       }),
-    [historyEndDate, historyRecords, historyStartDate],
+    [historyEndDate, historyMethod, historyRecords, historyStartDate, historyStatus],
   )
 
   const monthlyPaymentSummary = useMemo(() => {
@@ -210,9 +214,23 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
         PAYMENT_RECEIPT_ACTIONS.has(record.action) &&
         getManilaDateKey(record.createdAt).startsWith(summaryMonth),
     )
+    const latestRefundByBooking = new Map()
+    for (const record of historyRecords) {
+      if (record.action === "refund-recorded" && !latestRefundByBooking.has(record.bookingId)) {
+        latestRefundByBooking.set(record.bookingId, record)
+      }
+    }
+    const refunds = [...latestRefundByBooking.values()].filter(
+      (record) =>
+        record.paymentStatus === "refunded" &&
+        getManilaDateKey(record.refundDate || record.createdAt).startsWith(summaryMonth),
+    )
+    const refunded = refunds.reduce((sum, record) => sum + Number(record.amount || 0), 0)
     return {
       total: records.reduce((sum, record) => sum + Number(record.amount || 0), 0),
       count: records.length,
+      refunded,
+      net: records.reduce((sum, record) => sum + Number(record.amount || 0), 0) - refunded,
       gcash: records
         .filter((record) => record.paymentMethod === "gcash")
         .reduce((sum, record) => sum + Number(record.amount || 0), 0),
@@ -222,12 +240,29 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
     }
   }, [historyRecords, summaryMonth])
 
+  const outstandingBalance = useMemo(
+    () =>
+      bookings.reduce((sum, booking) => {
+        if (["Cancelled", "Declined"].includes(booking.status)) return sum
+        const total = Number(booking.totalPrice || 0)
+        const paid = booking.paymentStatus === "paid"
+          ? Number(booking.paymentAmount ?? total)
+          : Number(booking.paymentAmount || 0)
+        return sum + Math.max(0, total - paid)
+      }, 0),
+    [bookings],
+  )
+
+  const canViewFinance = ["owner", "admin", "finance"].includes(staffRole)
+  const canDownloadReceipt = canViewFinance || staffRole === "front-desk"
+
   const downloadInvoice = async (booking) => {
     const user = auth?.currentUser
     if (!user) {
       toast.error("Please sign in again to download an invoice.")
       return
     }
+
     setBusyBookingId(booking.id)
     try {
       const response = await fetch("/api/booking/download-invoice", {
@@ -256,6 +291,45 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
     } catch (downloadError) {
       console.error("Failed to download booking invoice:", downloadError)
       toast.error(downloadError.message || "Invoice could not be downloaded.")
+    } finally {
+      setBusyBookingId("")
+    }
+  }
+
+  const downloadReceipt = async (booking) => {
+    const user = auth?.currentUser
+    if (!user) {
+      toast.error("Please sign in again to download a receipt.")
+      return
+    }
+    setBusyBookingId(booking.id)
+    try {
+      const response = await fetch("/api/booking/download-receipt", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `****** user.getIdToken()}`,
+        },
+        body: JSON.stringify({ bookingId: booking.id }),
+        cache: "no-store",
+      })
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}))
+        throw new Error(result.error || `Receipt download failed (${response.status}).`)
+      }
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      link.href = url
+      link.download = `receipt-${booking.id}.pdf`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+      toast.success("Payment receipt downloaded.")
+    } catch (receiptError) {
+      console.error("Failed to download payment receipt:", receiptError)
+      toast.error(receiptError.message || "Payment receipt could not be downloaded.")
     } finally {
       setBusyBookingId("")
     }
@@ -374,6 +448,52 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
       toast.error("Select a room for the walk-in booking.")
       return
     }
+
+    const recordRefund = async (booking) => {
+      const amountInput = window.prompt(
+        "Refund amount (this records a manual refund; it does not transfer money):",
+        String(booking.refundAmount ?? booking.paymentAmount ?? 0),
+      )
+      if (amountInput === null) return
+      const refundAmount = Number(amountInput)
+      const refundStatus = window.prompt(
+        "Refund status: pending, refunded, or not_refunded",
+        booking.refundStatus === "not_applicable" ? "pending" : booking.refundStatus || "pending",
+      )
+      if (refundStatus === null) return
+      const refundDate = window.prompt(
+        "Refund date (YYYY-MM-DD; required for refunded):",
+        booking.refundDate || getLocalDate(),
+      )
+      if (refundDate === null) return
+      const refundReason = window.prompt(
+        "Reason for the refund:",
+        booking.refundReason || booking.cancellationReason || "",
+      )
+      if (refundReason === null) return
+
+      setBusyBookingId(booking.id)
+      try {
+        const result = await bookingAdminRequest("/api/booking/update-refund", {
+          method: "POST",
+          body: JSON.stringify({ bookingId: booking.id, refundAmount, refundStatus, refundDate, refundReason }),
+        })
+        setBookings((current) =>
+          current.map((item) =>
+            item.id === booking.id
+              ? { ...item, refundAmount: result.refundAmount, refundStatus: result.refundStatus, refundDate, refundReason }
+              : item,
+          ),
+        )
+        await loadPaymentHistory()
+        toast.success("Manual refund record updated. No payment was transferred.")
+      } catch (refundError) {
+        console.error("Failed to update manual refund record:", refundError)
+        toast.error(refundError.message || "Refund record could not be updated.")
+      } finally {
+        setBusyBookingId("")
+      }
+    }
     if (walkIn.checkIn >= walkIn.checkOut) {
       toast.error("Check-out must be after check-in.")
       return
@@ -435,7 +555,7 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
             <RefreshCw className="h-4 w-4" />
             Refresh
           </button>
-          <button
+          {canViewFinance ? <button
             type="button"
             onClick={exportPaymentHistory}
             disabled={historyLoading || filteredHistoryRecords.length === 0}
@@ -443,11 +563,11 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
           >
             <FileSpreadsheet className="h-4 w-4" />
             Download Excel (.csv)
-          </button>
+          </button> : null}
         </div>
       </header>
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-2xl border border-[#eee2d5] bg-white p-5 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#7b817a]">Payments received</p>
           <p className="mt-2 text-2xl font-bold text-[#14583f]">
@@ -469,12 +589,16 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
             {bookings.filter((booking) => booking.paymentStatus === "proof_submitted").length}
           </p>
         </div>
+        <div className="rounded-2xl border border-[#eee2d5] bg-white p-5 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#7b817a]">Outstanding balance</p>
+          <p className="mt-2 text-2xl font-bold text-amber-700">{formatMoney(outstandingBalance)}</p>
+        </div>
       </div>
 
       <div className="flex w-fit flex-wrap gap-2 rounded-2xl border border-[#eee2d5] bg-white p-1.5">
         {[
           { value: "payments", label: "Payments" },
-          { value: "history", label: `Payment history (${historyRecords.length})` },
+          ...(canViewFinance ? [{ value: "history", label: `Payment history (${historyRecords.length})` }] : []),
         ].map((view) => (
           <button
             key={view.value}
@@ -638,10 +762,11 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
         <div className="space-y-4">
           {visibleBookings.map((booking) => {
             const paymentStatus = booking.paymentStatus || "unpaid"
-            const canReviewProof = paymentStatus === "proof_submitted"
+            const canReviewProof = paymentStatus === "proof_submitted" && canViewFinance
             const canRecordCash =
               !isLegacyHelpdesk &&
               ownerUid &&
+              ["owner", "admin", "front-desk"].includes(staffRole) &&
               !["Completed", "Declined", "Cancelled"].includes(booking.status) &&
               paymentStatus !== "paid"
 
@@ -666,6 +791,24 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
                   <div><dt className="text-[#7b817a]">Method</dt><dd className="font-medium capitalize text-[#18271e]">{booking.paymentMethod || "—"}</dd></div>
                   <div><dt className="text-[#7b817a]">Booking</dt><dd className="font-medium text-[#18271e]">{booking.status || "Pending"}</dd></div>
                 </dl>
+                {booking.status === "Cancelled" ? (
+                  <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+                    <p className="font-semibold">Cancellation and manual refund</p>
+                    <p className="mt-1">Reason: {booking.cancellationReason || booking.refundReason || "Not recorded"}</p>
+                    <p>Refund: {formatMoney(booking.refundAmount)} · {(booking.refundStatus || "not_applicable").replaceAll("_", " ")}{booking.refundDate ? ` · ${formatDate(booking.refundDate)}` : ""}</p>
+                    {["owner", "admin", "finance"].includes(staffRole) ? (
+                      <button
+                        type="button"
+                        disabled={busyBookingId === booking.id}
+                        onClick={() => recordRefund(booking)}
+                        className="mt-3 rounded-lg border border-amber-400 px-3 py-1.5 text-xs font-semibold hover:bg-amber-100 disabled:opacity-60"
+                      >
+                        Update manual refund record
+                      </button>
+                    ) : null}
+                    <p className="mt-2 text-xs">This is tracking only; no money is transferred by the app.</p>
+                  </div>
+                ) : null}
 
                 <div className="mt-4 flex flex-wrap gap-3">
                   {booking.hasProofOfPayment ? (
@@ -711,6 +854,17 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
                       className="rounded-xl border border-[#00634b] px-4 py-2 text-sm font-semibold text-[#14583f] hover:bg-[#f1f7f2] disabled:opacity-60"
                     >Record cash received</button>
                   ) : null}
+                  {paymentStatus === "paid" && canDownloadReceipt ? (
+                    <button
+                      type="button"
+                      disabled={busyBookingId === booking.id}
+                      onClick={() => downloadReceipt(booking)}
+                      className="inline-flex items-center gap-2 rounded-xl border border-[#d9e3dc] px-4 py-2 text-sm font-semibold text-[#14583f] hover:bg-[#f1f7f2] disabled:opacity-60"
+                    >
+                      <Receipt className="h-4 w-4" />
+                      {busyBookingId === booking.id ? "Preparing…" : "Download receipt"}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     disabled={busyBookingId === booking.id}
@@ -736,7 +890,7 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
                 A dated audit of payment proof, GCash verification, cash receipts, and walk-in payments.
               </p>
             </div>
-            <button
+            {canViewFinance ? <button
               type="button"
               onClick={exportPaymentHistory}
               disabled={historyLoading || historyRecords.length === 0}
@@ -744,7 +898,7 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
             >
               <Download className="h-4 w-4" />
               Export Excel (.csv)
-            </button>
+            </button> : null}
           </div>
           {historyLoading ? (
             <p className="rounded-2xl border border-[#eee2d5] bg-white p-5 text-sm text-[#66736a]" role="status">
@@ -774,7 +928,7 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
                     />
                   </label>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <div className="rounded-xl border border-[#e4eadf] bg-white p-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#7b817a]">Total received</p>
                     <p className="mt-2 text-xl font-bold text-[#14583f]">{formatMoney(monthlyPaymentSummary.total)}</p>
@@ -790,6 +944,14 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
                   <div className="rounded-xl border border-[#e4eadf] bg-white p-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#7b817a]">Cash received</p>
                     <p className="mt-2 text-xl font-bold text-[#14583f]">{formatMoney(monthlyPaymentSummary.cash)}</p>
+                  </div>
+                  <div className="rounded-xl border border-[#e4eadf] bg-white p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#7b817a]">Refunded</p>
+                    <p className="mt-2 text-xl font-bold text-red-700">{formatMoney(monthlyPaymentSummary.refunded)}</p>
+                  </div>
+                  <div className="rounded-xl border border-[#e4eadf] bg-white p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#7b817a]">Net received</p>
+                    <p className="mt-2 text-xl font-bold text-[#14583f]">{formatMoney(monthlyPaymentSummary.net)}</p>
                   </div>
                 </div>
               </section>
@@ -815,16 +977,39 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk }) {
                     className="mt-1 block rounded-lg border border-[#e6ded2] bg-[#fffaf5] px-3 py-2"
                   />
                 </label>
+                <label className="text-sm font-semibold text-[#18271e]">
+                  Method
+                  <select value={historyMethod} onChange={(event) => setHistoryMethod(event.target.value)} className="mt-1 block rounded-lg border border-[#e6ded2] bg-[#fffaf5] px-3 py-2">
+                    <option value="all">All methods</option>
+                    <option value="gcash">GCash</option>
+                    <option value="cash">Cash</option>
+                  </select>
+                </label>
+                <label className="text-sm font-semibold text-[#18271e]">
+                  Status
+                  <select value={historyStatus} onChange={(event) => setHistoryStatus(event.target.value)} className="mt-1 block rounded-lg border border-[#e6ded2] bg-[#fffaf5] px-3 py-2">
+                    <option value="all">All statuses</option>
+                    <option value="paid">Paid</option>
+                    <option value="unpaid">Unpaid</option>
+                    <option value="proof_submitted">Proof submitted</option>
+                    <option value="rejected">Rejected</option>
+                    <option value="pending">Refund pending</option>
+                    <option value="refunded">Refunded</option>
+                    <option value="not_refunded">Not refunded</option>
+                  </select>
+                </label>
                 <button
                   type="button"
                   onClick={() => {
                     setHistoryStartDate("")
                     setHistoryEndDate("")
+                    setHistoryMethod("all")
+                    setHistoryStatus("all")
                   }}
-                  disabled={!historyStartDate && !historyEndDate}
+                  disabled={!historyStartDate && !historyEndDate && historyMethod === "all" && historyStatus === "all"}
                   className="rounded-xl border border-[#d9e3dc] px-4 py-2.5 text-sm font-semibold text-[#14583f] hover:bg-[#f1f7f2] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Clear dates
+                  Clear filters
                 </button>
                 <p className="ml-auto pb-2 text-sm text-[#66736a]">
                   {filteredHistoryRecords.length} of {historyRecords.length} activities

@@ -1,11 +1,13 @@
-import crypto from "node:crypto"
 import {
   authenticateBookingAdmin,
   datesBetween,
   findRoomForTenant,
+  getBookingDateLockId,
   getBookingDb,
   getManilaDate,
   getRoomKey,
+  hasBookingPermission,
+  hasActiveBookingConflict,
   jsonFailure,
   normalizeDate,
   overlaps,
@@ -15,7 +17,9 @@ export async function POST(request) {
   const authResult = await authenticateBookingAdmin(request)
   if (authResult.error) return jsonFailure(authResult.error, authResult.status)
   const { user } = authResult
-  if (user.isLegacyAdmin) return jsonFailure("Only a resort owner can add a walk-in booking.", 403)
+  if (user.isLegacyAdmin || !hasBookingPermission(user, "booking")) {
+    return jsonFailure("Your account cannot add a walk-in booking.", 403)
+  }
 
   const db = getBookingDb()
   if (!db) return jsonFailure("Firebase Admin credentials are not configured.", 503)
@@ -57,13 +61,13 @@ export async function POST(request) {
   if (checkIn < getManilaDate()) return jsonFailure("Check-in date cannot be in the past.", 400)
 
   try {
-    const ownerSnapshot = await db.collection("resortOwners").doc(user.uid).get()
+    const ownerSnapshot = await db.collection("resortOwners").doc(user.ownerUid).get()
     if (!ownerSnapshot.exists || String(ownerSnapshot.get("status") || "").toLowerCase() !== "approved") {
       return jsonFailure("Only an approved resort owner can add walk-in bookings.", 403)
     }
 
-    const room = await findRoomForTenant(db, roomType, user.uid)
-    if (!room || room.ownerUid !== user.uid) return jsonFailure("Room not found for this resort.", 404)
+    const room = await findRoomForTenant(db, roomType, user.ownerUid)
+    if (!room || room.ownerUid !== user.ownerUid) return jsonFailure("Room not found for this resort.", 404)
     if (room.availability && room.availability !== "Available") {
       return jsonFailure("The selected room is not currently available.", 409)
     }
@@ -82,10 +86,10 @@ export async function POST(request) {
     const totalPrice = Math.round(pricePerNight * nights * 100) / 100
     if (!Number.isFinite(totalPrice)) return jsonFailure("The room price could not be calculated.", 409)
 
-    const roomKey = getRoomKey(user.uid, roomType)
+    const roomKey = getRoomKey(user.ownerUid, roomType)
     const lockRefs = stayDates.map((date) =>
       db.collection("bookingDateLocks").doc(
-        crypto.createHash("sha256").update(`${roomKey}\n${date}`).digest("hex"),
+        getBookingDateLockId(roomKey, date),
       ),
     )
     const bookingRef = db.collection("guestbooking").doc()
@@ -99,19 +103,15 @@ export async function POST(request) {
       const existing = await transaction.get(
         db.collection("guestbooking").where("roomType", "==", roomType),
       )
-      const conflictingBooking = existing.docs.some((snapshot) => {
-        const booking = snapshot.data()
-        return (
-          booking.ownerUid === user.uid &&
-          ["Pending", "Approved"].includes(booking.status || "Pending") &&
-          overlaps(checkIn, checkOut, booking.checkIn, booking.checkOut)
-        )
-      })
+      const conflictingBooking = hasActiveBookingConflict(
+        existing.docs.map((snapshot) => snapshot.data()),
+        { checkIn, checkOut, ownerUid: user.ownerUid },
+      )
       if (conflictingBooking) throw new Error("DATES_UNAVAILABLE")
 
       const now = new Date()
       transaction.create(bookingRef, {
-        ownerUid: user.uid,
+        ownerUid: user.ownerUid,
         name,
         email,
         phone,
@@ -136,7 +136,7 @@ export async function POST(request) {
         updatedAt: now,
       })
       transaction.create(historyRef, {
-        ownerUid: user.uid,
+        ownerUid: user.ownerUid,
         bookingId: bookingRef.id,
         guestName: name,
         roomType,
@@ -152,7 +152,7 @@ export async function POST(request) {
       lockRefs.forEach((ref, index) => {
         transaction.create(ref, {
           roomKey,
-          ownerUid: user.uid,
+          ownerUid: user.ownerUid,
           roomType,
           date: stayDates[index],
           bookingId: bookingRef.id,

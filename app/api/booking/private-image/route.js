@@ -2,6 +2,7 @@ import {
   authenticateBookingAdmin,
   canManageBooking,
   getBookingDb,
+  hasBookingPermission,
   jsonFailure,
 } from "@/lib/booking-api-server"
 
@@ -15,6 +16,12 @@ export async function GET(request) {
   if (!bookingId || !["proof", "id"].includes(type)) {
     return jsonFailure("Booking and image type are required.", 400)
   }
+  if (type === "id" && !authResult.user.isOwner) {
+    return jsonFailure("Only the resort owner may view a guest ID.", 403)
+  }
+  if (type === "proof" && !hasBookingPermission(authResult.user, "payment")) {
+    return jsonFailure("Your staff role cannot view payment proof.", 403)
+  }
 
   const db = getBookingDb()
   if (!db) return jsonFailure("Firebase Admin credentials are not configured.", 503)
@@ -24,8 +31,8 @@ export async function GET(request) {
     if (!bookingSnapshot.exists) return jsonFailure("Booking not found.", 404)
 
     const booking = bookingSnapshot.data()
-    if (!canManageBooking(authResult.user, booking) || booking.ownerUid !== authResult.user.uid) {
-      return jsonFailure("Only this resort owner can view booking uploads.", 403)
+    if (!canManageBooking(authResult.user, booking)) {
+      return jsonFailure("You cannot view booking uploads.", 403)
     }
     if (type === "id" && booking.status === "Completed") {
       return jsonFailure("Guest ID images are unavailable for completed bookings.", 404)

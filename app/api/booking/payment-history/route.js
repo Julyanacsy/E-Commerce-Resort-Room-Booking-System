@@ -1,5 +1,6 @@
 import {
   authenticateBookingAdmin,
+  hasBookingPermission,
   getBookingDb,
   jsonFailure,
 } from "@/lib/booking-api-server"
@@ -7,8 +8,11 @@ import {
 export async function GET(request) {
   const authResult = await authenticateBookingAdmin(request)
   if (authResult.error) return jsonFailure(authResult.error, authResult.status)
-  if (authResult.user.isLegacyAdmin) {
-    return jsonFailure("Payment history is available to resort owners only.", 403)
+  if (
+    authResult.user.isLegacyAdmin ||
+    !hasBookingPermission(authResult.user, "payment")
+  ) {
+    return jsonFailure("Payment history is not available to this account.", 403)
   }
 
   const db = getBookingDb()
@@ -17,7 +21,7 @@ export async function GET(request) {
   try {
     const snapshot = await db
       .collection("paymentHistory")
-      .where("ownerUid", "==", authResult.user.uid)
+      .where("ownerUid", "==", authResult.user.ownerUid)
       .get()
     const events = snapshot.docs
       .map((item) => {
@@ -33,6 +37,7 @@ export async function GET(request) {
           paymentStatus: String(event.paymentStatus || ""),
           paymentMethod: String(event.paymentMethod || ""),
           amount: Number(event.amount || 0),
+          refundDate: String(event.refundDate || ""),
           recordedBy: String(event.recordedBy || ""),
           createdAt: event.createdAt?.toDate?.().toISOString() || null,
         }
