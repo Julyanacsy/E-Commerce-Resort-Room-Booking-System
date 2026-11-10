@@ -420,6 +420,7 @@ export default function Home() {
   const [otpCode, setOtpCode] = useState("")
   const [otpVerifying, setOtpVerifying] = useState(false)
   const [bookingSubmitting, setBookingSubmitting] = useState(false)
+  const [cancellationTermsConfirmed, setCancellationTermsConfirmed] = useState(false)
   const [paymentQrUrl, setPaymentQrUrl] = useState("")
   const [paymentInstructions, setPaymentInstructions] = useState("")
   const [proofOfPaymentImage, setProofOfPaymentImage] = useState("")
@@ -447,6 +448,8 @@ export default function Home() {
   const [dateAvailability, setDateAvailability] = useState({ checking: false, available: true, message: "" })
   const [bookedDates, setBookedDates] = useState([])
   const [bookedRanges, setBookedRanges] = useState([])
+  const [bookedDatesLoading, setBookedDatesLoading] = useState(false)
+  const [bookedDatesError, setBookedDatesError] = useState("")
   const [checkInCalendarOpen, setCheckInCalendarOpen] = useState(false)
   const [checkOutCalendarOpen, setCheckOutCalendarOpen] = useState(false)
   const [feedback, setFeedback] = useState({ name: "", email: "", rating: 5, message: "" })
@@ -454,24 +457,17 @@ export default function Home() {
   const [feedbacks, setFeedbacks] = useState([])
   const [loadingFeedbacks, setLoadingFeedbacks] = useState(true)
   const [currentFeedbackIndex, setCurrentFeedbackIndex] = useState(0)
-  const [bookingConfirmed, setBookingConfirmed] = useState(false)
+  const [bookingConfirmation, setBookingConfirmation] = useState(null)
   const [contact, setContact] = useState({ name: "", email: "", message: "" })
   const [contactSubmitting, setContactSubmitting] = useState(false)
 
   const calculateNights = (checkIn, checkOut) => {
-    try {
-      if (!checkIn || !checkOut) return 0
-      const inDate = checkIn.includes("T") ? new Date(checkIn) : new Date(checkIn + "T00:00:00")
-      const outDate = checkOut.includes("T") ? new Date(checkOut) : new Date(checkOut + "T00:00:00")
-      if (isNaN(inDate.getTime()) || isNaN(outDate.getTime())) return 0
-      inDate.setHours(0, 0, 0, 0)
-      outDate.setHours(0, 0, 0, 0)
-      const diff = outDate.getTime() - inDate.getTime()
-      const nights = Math.ceil(diff / (1000 * 60 * 60 * 24))
-      return nights > 0 ? nights : 1
-    } catch {
-      return 0
-    }
+    if (!checkIn || !checkOut) return 0
+    const inDate = new Date(`${checkIn.slice(0, 10)}T00:00:00.000Z`)
+    const outDate = new Date(`${checkOut.slice(0, 10)}T00:00:00.000Z`)
+    if (Number.isNaN(inDate.getTime()) || Number.isNaN(outDate.getTime())) return 0
+    const nights = (outDate.getTime() - inDate.getTime()) / 86_400_000
+    return Number.isInteger(nights) && nights > 0 ? nights : 0
   }
 
   const selectedRoom = rooms.find((r) => String(r?.name || "").trim() === String(formData.roomType || "").trim()) || null
@@ -481,7 +477,7 @@ export default function Home() {
   const nights = calculateNights(formData.checkIn, formData.checkOut)
   const estimatedTotal = nights > 0 ? pricePerNight * nights : 0
   const formatPhp = (n) =>
-    `₱${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+    `₱${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
 
   useEffect(() => {
     if (!db || !bookingOwnerUid) {
@@ -613,45 +609,62 @@ export default function Home() {
 
   // Fetch booked dates when room type is selected
   useEffect(() => {
-    const fetchBookedDates = async () => {
-      if (!formData.roomType) {
-        setBookedDates([])
-        setBookedRanges([])
-        return
-      }
-
-      try {
-        const response = await fetch("/api/booking/get-booked-dates", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ roomType: formData.roomType, ownerUid: bookingOwnerUid }),
-        })
-
-        const data = await response.json()
-
-        if (response.ok) {
-          const dates = data.bookedDates || []
-          console.log("📅 Fetched booked dates for", formData.roomType, ":", dates)
-          console.log("📅 Booked ranges:", data.bookedRanges || [])
-          setBookedDates(dates)
-          setBookedRanges(data.bookedRanges || [])
-        } else {
-          console.error("❌ Failed to fetch booked dates:", data.error)
-          setBookedDates([])
-          setBookedRanges([])
-        }
-      } catch (error) {
-        console.error("❌ Error fetching booked dates:", error)
-        setBookedDates([])
-        setBookedRanges([])
-      }
+    const controller = new AbortController()
+    let active = true
+    if (!formData.roomType) {
+      setBookedDates([])
+      setBookedRanges([])
+      setBookedDatesError("")
+      setBookedDatesLoading(false)
+      return () => controller.abort()
     }
 
-    fetchBookedDates()
+    setBookedDatesLoading(true)
+    setBookedDatesError("")
+    fetch("/api/booking/get-booked-dates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ roomType: formData.roomType, ownerUid: bookingOwnerUid }),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.error || "Booked dates could not be loaded.")
+        if (!active) return
+        setBookedDates(Array.isArray(data.bookedDates) ? data.bookedDates : [])
+        setBookedRanges(Array.isArray(data.bookedRanges) ? data.bookedRanges : [])
+      })
+      .catch((error) => {
+        if (!active || error.name === "AbortError") return
+        console.error("Failed to load booked dates:", error)
+        setBookedDates([])
+        setBookedRanges([])
+        setBookedDatesError(error.message || "Booked dates could not be loaded.")
+      })
+      .finally(() => {
+        if (active) setBookedDatesLoading(false)
+      })
+
+    return () => {
+      active = false
+      controller.abort()
+    }
   }, [formData.roomType, bookingOwnerUid])
 
   // Quick validation - no async checking, just check booked dates locally
   useEffect(() => {
+    if (bookedDatesLoading) {
+      setDateAvailability({ checking: true, available: false, message: "Checking date availability..." })
+      return
+    }
+    if (bookedDatesError) {
+      setDateAvailability({
+        checking: false,
+        available: false,
+        message: "Date availability could not be checked. Please try again.",
+      })
+      return
+    }
     // Reset availability when dates change
     if (!formData.roomType || !formData.checkIn) {
       setDateAvailability({ checking: false, available: true, message: "" })
@@ -733,7 +746,7 @@ export default function Home() {
     console.log("✅ Date range is available")
     // All dates are available
     setDateAvailability({ checking: false, available: true, message: "" })
-  }, [formData.roomType, formData.checkIn, formData.checkOut, bookedDates])
+  }, [formData.roomType, formData.checkIn, formData.checkOut, bookedDates, bookedDatesLoading, bookedDatesError])
 
   // Helper function to check if a date is disabled (booked or in the past)
   const isDateDisabled = (dateString) => {
@@ -755,6 +768,10 @@ export default function Home() {
     e.preventDefault()
     
     if (!otpSent) {
+      if (!cancellationTermsConfirmed) {
+        toast.error("Please confirm that you will check the resort's cancellation and refund terms before paying.")
+        return
+      }
       if (paymentRequired) {
         if (!paymentQrUrl) {
           toast.error("Payment QR code is not available yet. Please contact the resort admin.")
@@ -797,7 +814,6 @@ export default function Home() {
         
         if (response.ok) {
           setOtpSent(true)
-          setBookingConfirmed(false)
           toast.success("OTP sent successfully! Check your email.")
           // Reset reCAPTCHA
           recaptchaRef.current?.reset()
@@ -847,13 +863,14 @@ export default function Home() {
             email: normalizedEmail,
             otp: normalizedOtp,
             ownerUid: bookingOwnerUid,
+            cancellationTermsAcknowledged: cancellationTermsConfirmed,
             ...(paymentRequired ? { proofOfPaymentImage, validIdImage } : {}),
           }),
         })
         const result = await response.json()
 
         if (response.ok && result.success) {
-          toast.success("Booking confirmed successfully! We've sent a confirmation email. Your booking status is pending admin approval.", {
+          toast.success("Booking request received. Its status is pending resort approval.", {
             duration: 6000,
           })
           // Reset form
@@ -871,7 +888,8 @@ export default function Home() {
           setValidIdImage("")
           setOtpSent(false)
           setOtpCode("")
-          setBookingConfirmed(true)
+          setCancellationTermsConfirmed(false)
+          setBookingConfirmation({ bookingId: result.bookingId, status: "Pending" })
         } else {
           toast.error(result.error || "Failed to submit booking. Please try again.")
         }
@@ -1733,7 +1751,29 @@ export default function Home() {
               theme === "dark" ? "bg-slate-700/90 ring-1 ring-slate-600/60" : "bg-white ring-1 ring-gray-200/80"
             }`}
           >
-            {!otpSent ? (
+            {bookingConfirmation ? (
+              <div
+                role="status"
+                aria-live="polite"
+                className="rounded-xl border border-emerald-200 bg-emerald-50 p-6 text-center text-emerald-950"
+              >
+                <p className="text-xl font-bold">Booking request received</p>
+                <p className="mt-2">
+                  Status: <strong>{bookingConfirmation.status} — awaiting resort approval</strong>
+                </p>
+                <p className="mt-2 text-sm">
+                  Booking reference: <strong className="break-all">{bookingConfirmation.bookingId}</strong>
+                </p>
+                <p className="mt-2 text-sm">We sent a confirmation email with these details.</p>
+                <button
+                  type="button"
+                  onClick={() => setBookingConfirmation(null)}
+                  className="mt-5 rounded-lg bg-emerald-700 px-4 py-2 font-semibold text-white transition hover:bg-emerald-800"
+                >
+                  Start another booking
+                </button>
+              </div>
+            ) : !otpSent ? (
               <>
                 {/* Step 1: Booking Form */}
                 <div className="mb-8 border-b border-gray-200/80 pb-8 dark:border-slate-600/80">
@@ -1985,6 +2025,12 @@ export default function Home() {
                     <p className="mt-2 text-xs text-amber-700">Please avoid these dates when booking.</p>
                   </div>
                 )}
+
+                {bookedDatesError && (
+                  <p role="alert" className="mb-6 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                    Date availability could not be checked. Please refresh the page or try again before booking.
+                  </p>
+                )}
                 
                 {/* Date Availability Status */}
                 {formData.roomType && formData.checkIn && formData.checkOut && (
@@ -2076,11 +2122,31 @@ export default function Home() {
                         <span className="font-bold text-emerald-700">{formatPhp(estimatedTotal)}</span>
                       </div>
                       <p className="text-xs text-slate-500">
-                        Final amount may change after admin review (discounts, adjustments, or room changes).
+                        This estimate uses the listed room rate and selected dates. The server verifies the final amount when you submit.
                       </p>
                     </div>
                   </div>
                 )}
+
+                <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+                  <p className="font-semibold">Cancellation and refunds</p>
+                  <p className="mt-1">
+                    Cancellation terms are set by the resort. Confirm its cancellation and refund policy before paying.
+                    Refunds are handled manually by the resort; this app does not process refunds automatically.
+                  </p>
+                  <label className="mt-3 flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={cancellationTermsConfirmed}
+                      onChange={(event) => setCancellationTermsConfirmed(event.target.checked)}
+                      required
+                      className="mt-1 h-4 w-4 accent-emerald-700"
+                    />
+                    <span>
+                      I understand and will confirm the resort&apos;s cancellation and refund terms before making payment.
+                    </span>
+                  </label>
+                </div>
 
                 {/* Payment (GCash QR) + uploads */}
                 {paymentRequired && (
@@ -2288,6 +2354,9 @@ export default function Home() {
               type="submit"
                   disabled={
                     bookingSubmitting ||
+                    bookedDatesLoading ||
+                    Boolean(bookedDatesError) ||
+                    !cancellationTermsConfirmed ||
                     (Boolean(process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY) && !recaptchaToken) ||
                     (paymentRequired && (!paymentQrUrl || !proofOfPaymentImage || !validIdImage)) ||
                     (formData.roomType && formData.checkIn && formData.checkOut && !dateAvailability.available)
