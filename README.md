@@ -81,6 +81,21 @@ pnpm dev
 
 5. Open [http://localhost:3000](http://localhost:3000) in your browser.
 
+### Run with Docker Desktop
+
+Docker Desktop must be running. Put local credentials in the ignored `.env.local` file; never add that file to Git. `docker-compose.yml` passes public `NEXT_PUBLIC_*` settings to the build and server-only credentials to the container at runtime.
+
+```powershell
+docker --version
+docker compose version
+docker compose --env-file .env.local config --quiet
+.\scripts\docker-up.ps1
+docker compose ps
+curl.exe -I http://localhost:3000/resorts
+```
+
+Open [http://localhost:3000](http://localhost:3000). Check container output with `docker compose logs --tail 100 resort-web`. The helper script copies the source into a temporary local build context to avoid Docker BuildKit errors from OneDrive cloud placeholders; it excludes `.env.local` and removes the temporary context after the image is built. For a normal local (non-OneDrive) checkout, `docker compose --env-file .env.local up -d --build` also works. The current local environment must include `NEXT_PUBLIC_RECAPTCHA_SITE_KEY` and `RECAPTCHA_SECRET_KEY` for guest booking OTP/verification to work in production mode. `CRON_SECRET` is needed for scheduled reminders. Add these to `.env.local` before expecting those features to work.
+
 ## Project Structure
 
 ```

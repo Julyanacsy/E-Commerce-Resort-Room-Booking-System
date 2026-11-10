@@ -1,0 +1,16 @@
+node_modules
+.next
+.git
+.github
+.gitignore
+.vscode
+.idea
+.env
+.env.*
+!.env.example
+pnpm-lock.yaml
+.vercel
+coverage
+resort-booking
+npm-debug.log*
+*.md
