@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth"
+import { onAuthStateChanged, signOut } from "firebase/auth"
 import {
   addDoc,
   collection,
@@ -19,7 +19,9 @@ import {
 } from "firebase/firestore"
 import {
   BedDouble,
+  BellRing,
   CalendarCheck,
+  CalendarDays,
   History,
   ChevronsLeft,
   ChevronsRight,
@@ -34,10 +36,12 @@ import {
   Sun,
   Upload,
   Wallet,
+  Users,
   X,
 } from "lucide-react"
 import { toast } from "sonner"
 import { auth, db, googleProvider } from "@/lib/firebase"
+import { getGoogleSignInErrorMessage, signInWithGoogle } from "@/lib/google-sign-in"
 import { BRANDING_DEFAULTS, useBranding } from "@/hooks/use-branding"
 import { useResortOwnerBranding } from "@/hooks/use-resort-owner-branding"
 import { useMarketplaceSettings } from "@/hooks/use-marketplace-settings"
@@ -73,17 +77,23 @@ import ManageFeedback from "@/components/admin/pages/manage-feedback"
 import AdminOverview from "@/components/admin/pages/admin-overview"
 import ManageRooms from "@/components/admin/pages/manage-rooms"
 import PaymentSettings from "@/components/admin/payment-settings"
+import BookingCalendar from "@/components/admin/booking-calendar"
+import StaffManagement from "@/components/admin/staff-management"
+import ReminderSettings from "@/components/admin/reminder-settings"
 const ALLOWED_ADMINS = ["admin@luxestay.com", "resort.helpdesk01@gmail.com"]
 
 const NAV_ITEMS = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "manage-rooms", label: "Manage Rooms", icon: BedDouble },
   { key: "manage-bookings", label: "Manage Bookings", icon: CalendarCheck },
+  { key: "booking-calendar", label: "Booking Calendar", icon: CalendarDays },
   { key: "booking-history", label: "Booking History", icon: History },
   { key: "contact-messages", label: "Contact Messages", icon: MessageCircle },
   { key: "manage-feedback", label: "Manage Feedback", icon: Star },
   { key: "brand-settings", label: "Brand Settings", icon: Paintbrush },
   { key: "payment-integration", label: "Payments", icon: Wallet },
+  { key: "reminder-settings", label: "Email Reminders", icon: BellRing },
+  { key: "staff-management", label: "Staff Accounts", icon: Users },
 ]
 
 /** Hero export: smaller file uploads faster; still sharp at typical viewport widths */
@@ -151,7 +161,19 @@ export default function AdminPage() {
     return "light"
   })
   const isLegacyHelpdesk = Boolean(adminUser?.email && ALLOWED_ADMINS.includes(adminUser.email))
-  const tenantOwnerUid = adminUser && !isLegacyHelpdesk ? adminUser.uid : null
+  const tenantOwnerUid = adminUser && !isLegacyHelpdesk
+    ? adminUser.tenantOwnerUid || adminUser.uid
+    : null
+  const staffRole = adminUser?.staffRole || "owner"
+  const staffNavKeys = {
+    admin: ["manage-bookings", "booking-calendar", "booking-history", "payment-integration"],
+    "front-desk": ["manage-bookings", "booking-calendar", "payment-integration"],
+    finance: ["booking-history", "payment-integration"],
+  }
+  const visibleNavItems =
+    isLegacyHelpdesk || staffRole === "owner"
+      ? NAV_ITEMS
+      : NAV_ITEMS.filter((item) => staffNavKeys[staffRole]?.includes(item.key))
   const { branding: ownerBrandingSnapshot, updateBranding: updateOwnerBranding } =
     useResortOwnerBranding(tenantOwnerUid)
   const { branding: loginOwnerBranding } = useResortOwnerBranding(loginOwnerUid)
@@ -218,7 +240,7 @@ export default function AdminPage() {
   }
 
   useEffect(() => {
-    if (!db || !tenantOwnerUid || isLegacyHelpdesk) {
+    if (!db || !tenantOwnerUid || isLegacyHelpdesk || !adminUser?.isResortOwner) {
       setOwnerApproved(false)
       return undefined
     }
@@ -226,10 +248,10 @@ export default function AdminPage() {
       const st = String(snap.data()?.status || "").trim().toLowerCase()
       setOwnerApproved(st === "approved")
     })
-  }, [tenantOwnerUid, isLegacyHelpdesk])
+  }, [tenantOwnerUid, isLegacyHelpdesk, adminUser?.isResortOwner])
 
   useEffect(() => {
-    if (!db || !tenantOwnerUid || isLegacyHelpdesk) return undefined
+    if (!db || !tenantOwnerUid || isLegacyHelpdesk || !adminUser?.isResortOwner) return undefined
     setListingLoading(true)
     const unsub = onSnapshot(
       doc(db, "resorts", tenantOwnerUid),
@@ -257,7 +279,7 @@ export default function AdminPage() {
           (!ownerBrandingSnapshot || ownerBrandingSnapshot.name === BRANDING_DEFAULTS.name)
         ) {
           didBootstrapBranding.current = true
-          // Only merge listing identity — never write global LuxeStay defaults into Firestore.
+          // Only merge listing identity — never write global BayRest defaults into Firestore.
           const patch = {
             name: resortName,
             tagline: resortDesc ? resortDesc.slice(0, 80) : (ownerBrandingSnapshot?.tagline?.trim() || ""),
@@ -271,7 +293,7 @@ export default function AdminPage() {
       () => setListingLoading(false),
     )
     return () => unsub()
-  }, [tenantOwnerUid, isLegacyHelpdesk, ownerBrandingSnapshot, updateOwnerBranding])
+  }, [tenantOwnerUid, isLegacyHelpdesk, adminUser?.isResortOwner, ownerBrandingSnapshot, updateOwnerBranding])
 
   /** Fields required only to publish (contact + resort name + ≥1 room). Listing copy can be filled later. */
   const publishMissing = useMemo(() => {
@@ -393,21 +415,43 @@ export default function AdminPage() {
 
         // Legacy/internal admins: always allow
         if (ALLOWED_ADMINS.length && isWhitelisted) {
-          setAdminUser(firebaseUser)
+          setAdminUser({ ...firebaseUser, staffRole: "legacy", tenantOwnerUid: null })
           setAuthError("")
           setAccessMessage("")
           setAuthLoading(false)
           return
         }
 
-        // Resort owner access: must exist and be approved
+        const resolveStaffAccess = async () => {
+          const response = await fetch("/api/booking/admin-session", {
+            headers: { Authorization: `Bearer ${await firebaseUser.getIdToken()}` },
+            cache: "no-store",
+          })
+          const result = await response.json().catch(() => ({}))
+          if (!response.ok || !result.ownerUid || result.isOwner) return false
+          setAdminUser({
+            ...firebaseUser,
+            tenantOwnerUid: result.ownerUid,
+            staffRole: result.role,
+            isResortOwner: false,
+          })
+          setCurrentPage(result.role === "finance" ? "payment-integration" : "manage-bookings")
+          setAuthError("")
+          setAccessMessage("")
+          setAuthLoading(false)
+          return true
+        }
+
         try {
           const ownerSnap = await getDoc(doc(db, "resortOwners", firebaseUser.uid))
 
           if (!ownerSnap.exists()) {
+            if (await resolveStaffAccess()) return
             setAdminUser(null)
             setAuthError("")
-            setAccessMessage("This account has no resort owner record yet. Please join from the marketplace first.")
+            setAccessMessage(
+              "This Google account has no approved resort access or active staff invitation. Resort owners can register on the Marketplace; staff should ask their resort owner to invite this email address.",
+            )
             setAuthLoading(false)
             return
           }
@@ -426,11 +470,21 @@ export default function AdminPage() {
             return
           }
 
-          setAdminUser(firebaseUser)
+          setAdminUser({
+            ...firebaseUser,
+            tenantOwnerUid: firebaseUser.uid,
+            staffRole: "owner",
+            isResortOwner: true,
+          })
           setAuthError("")
           setAccessMessage("")
           setAuthLoading(false)
         } catch (error) {
+          try {
+            if (await resolveStaffAccess()) return
+          } catch (staffError) {
+            console.error("Failed to verify staff access", staffError)
+          }
           console.error("Failed to verify resort owner access", error)
           setAdminUser(null)
           setAuthError("")
@@ -476,7 +530,7 @@ export default function AdminPage() {
   }, [])
 
   useEffect(() => {
-    if (!db || !adminUser) {
+    if (!db || !adminUser || (!isLegacyHelpdesk && !adminUser.isResortOwner)) {
       setRooms([])
       setRoomsLoading(false)
       return
@@ -541,7 +595,7 @@ export default function AdminPage() {
       },
     )
     return () => unsubscribe()
-  }, [adminUser])
+  }, [adminUser, isLegacyHelpdesk])
 
   const handleBrandFieldChange = (field) => (event) => {
     const { value } = event.target
@@ -723,13 +777,18 @@ export default function AdminPage() {
   }
 
   const handleGoogleLogin = async () => {
+    if (!auth || !googleProvider) {
+      setAuthError("Google sign-in is not available right now.")
+      return
+    }
     setAuthSubmitting(true)
     setAuthError("")
     try {
-      await signInWithPopup(auth, googleProvider)
+      const { redirected } = await signInWithGoogle(auth, googleProvider)
+      if (redirected) setAuthError("Popup blocked. Redirecting to Google sign-in…")
     } catch (error) {
       console.error("Google login failed", error)
-      setAuthError("Google login failed. Please try again.")
+      setAuthError(getGoogleSignInErrorMessage(error))
     } finally {
       setAuthSubmitting(false)
     }
@@ -899,6 +958,13 @@ export default function AdminPage() {
             <p className="mt-4 text-xs text-gray-500 text-center">
               Approved resort owners can access this dashboard. Internal admins are also allowed.
             </p>
+            {accessMessage.includes("no approved resort access") && (
+              <p className="mt-3 text-center text-sm text-gray-600">
+                <a className="font-semibold text-emerald-700 underline" href="/resorts">
+                  Register your resort on the Marketplace
+                </a>
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -970,7 +1036,7 @@ export default function AdminPage() {
               ? "overflow-y-auto" 
               : "overflow-hidden lg:overflow-hidden"
           }`}>
-            {NAV_ITEMS.map(({ key, label, icon: Icon }) => {
+            {visibleNavItems.map(({ key, label, icon: Icon }) => {
               const isActive = currentPage === key
               return (
                 <button
@@ -1024,7 +1090,7 @@ export default function AdminPage() {
               <p className={`text-xs uppercase tracking-[0.25em] whitespace-nowrap ${
                 theme === "dark" ? "text-slate-400" : "text-emerald-200"
               }`}>Signed in as</p>
-              <p className="font-semibold whitespace-nowrap">{adminUser?.displayName ?? "Administrator"}</p>
+              <p className="font-semibold whitespace-nowrap">Administrator</p>
             </div>
             
             {/* Theme Toggle Button */}
@@ -1137,6 +1203,7 @@ export default function AdminPage() {
             <ManageBookings
               isLegacyHelpdesk={isLegacyHelpdesk}
               ownerUid={tenantOwnerUid}
+              staffRole={staffRole}
               invoiceBusiness={{
                 name: brandForm.name,
                 address: brandForm.address,
@@ -1150,6 +1217,7 @@ export default function AdminPage() {
             <BookingHistory
               isLegacyHelpdesk={isLegacyHelpdesk}
               ownerUid={tenantOwnerUid}
+              staffRole={staffRole}
               invoiceBusiness={{
                 name: brandForm.name,
                 address: brandForm.address,
@@ -1157,6 +1225,11 @@ export default function AdminPage() {
                 email: brandForm.email,
               }}
             />
+          )}
+
+          {currentPage === "booking-calendar" && <BookingCalendar />}
+          {currentPage === "reminder-settings" && staffRole === "owner" && (
+            <ReminderSettings ownerUid={tenantOwnerUid} />
           )}
 
           {currentPage === "contact-messages" && (
@@ -1614,8 +1687,11 @@ export default function AdminPage() {
             <PaymentSettings
               tenantOwnerUid={tenantOwnerUid}
               isLegacyHelpdesk={isLegacyHelpdesk}
+              staffRole={staffRole}
             />
           )}
+
+          {currentPage === "staff-management" && staffRole === "owner" && <StaffManagement />}
         </div>
       </main>
     </div>

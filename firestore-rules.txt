@@ -27,6 +27,7 @@ service cloud.firestore {
       function isSuperAdminEmail() {
         return request.auth != null
           && request.auth.token.email != null
+          && request.auth.token.email_verified == true
           && (request.auth.token.email == "ecommerceresortadmin@gmail.com"
               || request.auth.token.email == "commerceresortadmin@gmail.com");
       }
@@ -50,7 +51,51 @@ service cloud.firestore {
             "createdAt",
             "updatedAt",
             "gcashQrImage",
-            "paymentInstructions"
+            "paymentInstructions",
+            "checkInInstructions"
+          ]));
+      allow delete: if isSuperAdminEmail();
+
+      match /staffInvitations/{email} {
+        allow read: if request.auth != null
+          && (request.auth.uid == ownerId
+            || (request.auth.token.email == email
+              && resource.data.get("active", false) == true));
+        allow write: if false;
+      }
+    }
+
+    // Resort listings are public. Owners may submit their own listings for review;
+    // only a verified Super Admin may approve, edit, create, or delete listings.
+    match /resorts/{resortId} {
+      function isSuperAdminEmail() {
+        return request.auth != null
+          && request.auth.token.email != null
+          && request.auth.token.email_verified == true
+          && (request.auth.token.email == "ecommerceresortadmin@gmail.com"
+              || request.auth.token.email == "commerceresortadmin@gmail.com");
+      }
+
+      allow read: if true;
+      allow create: if isSuperAdminEmail()
+        || (request.auth != null
+          && resortId == request.auth.uid
+          && request.resource.data.ownerUid == request.auth.uid
+          && request.resource.data.get("status", "pending") == "pending");
+      allow update: if isSuperAdminEmail()
+        || (request.auth != null
+          && resource.data.get("ownerUid", "") == request.auth.uid
+          && request.resource.data.ownerUid == request.auth.uid
+          && request.resource.data.status == "pending"
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            "ownerEmail",
+            "name",
+            "location",
+            "mapsUrl",
+            "description",
+            "status",
+            "updatedAt",
+            "createdAt"
           ]));
       allow delete: if isSuperAdminEmail();
     }
@@ -152,7 +197,8 @@ service cloud.firestore {
         "bookingOtpChallenges",
         "bookingDateLocks",
         "paymentHistory",
-        "resortOwners"
+        "resortOwners",
+        "resorts"
       ]) && request.auth != null;
     }
   }

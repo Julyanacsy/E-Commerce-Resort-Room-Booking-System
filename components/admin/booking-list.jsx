@@ -19,7 +19,15 @@ function formatMoney(value) {
   })}`
 }
 
-export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusiness, history }) {
+function formatTimestamp(value) {
+  if (!value) return "—"
+  const date = value?.toDate?.() || new Date(value)
+  return Number.isNaN(date.getTime())
+    ? "—"
+    : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date)
+}
+
+export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusiness, history, staffRole = "owner" }) {
   const [bookings, setBookings] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
@@ -46,6 +54,36 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
   }, [loadBookings, ownerUid, isLegacyHelpdesk])
 
   const updateStatus = async (booking, status) => {
+    const cancellation = {}
+    if (status === "Cancelled") {
+      const cancellationReason = window.prompt("Reason for cancellation:", booking.cancellationReason || "")
+      if (cancellationReason === null) return
+      const paid = Number(booking.paymentAmount || 0)
+      const refundAmount = window.prompt(
+        "Manual refund amount (enter 0 if no refund will be issued):",
+        String(booking.refundAmount ?? paid),
+      )
+      if (refundAmount === null) return
+      let refundStatus = "not_applicable"
+      let refundDate = ""
+      if (Number(refundAmount) > 0) {
+        refundStatus = window.prompt(
+          "Refund status: pending, refunded, or not_refunded",
+          booking.refundStatus === "not_applicable" ? "pending" : booking.refundStatus || "pending",
+        )
+        if (refundStatus === null) return
+        if (refundStatus === "refunded") {
+          refundDate = window.prompt("Refund date (YYYY-MM-DD):", new Date().toISOString().slice(0, 10))
+          if (refundDate === null) return
+        }
+      }
+      cancellation.cancellationReason = cancellationReason
+      cancellation.refundAmount = Number(refundAmount)
+      cancellation.refundStatus = refundStatus
+      cancellation.refundDate = refundDate
+      if (!window.confirm("Cancel this booking? Any refund is recorded manually and will not be transferred by the app.")) return
+    }
+
     setBusyBookingId(booking.id)
     try {
       await bookingAdminRequest("/api/booking/update-status", {
@@ -54,6 +92,7 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
           bookingId: booking.id,
           currentStatus: booking.status || "Pending",
           status,
+          ...cancellation,
         }),
       })
       if (["Declined", "Cancelled", "Completed"].includes(status)) {
@@ -75,6 +114,33 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
     } catch (updateError) {
       console.error("Failed to update booking:", updateError)
       toast.error(updateError.message || "Booking could not be updated.")
+    } finally {
+      setBusyBookingId("")
+    }
+  }
+
+  const updateStayStatus = async (booking, action) => {
+    setBusyBookingId(booking.id)
+    try {
+      const result = await bookingAdminRequest("/api/booking/stay-status", {
+        method: "POST",
+        body: JSON.stringify({ bookingId: booking.id, action }),
+      })
+      setBookings((current) =>
+        current.map((item) =>
+          item.id === booking.id
+            ? {
+                ...item,
+                stayStatus: result.stayStatus,
+                ...(action === "check-in" ? { checkedInAt: result.timestamp } : { checkedOutAt: result.timestamp }),
+              }
+            : item,
+        ),
+      )
+      toast.success(action === "check-in" ? "Guest checked in." : "Guest checked out.")
+    } catch (updateError) {
+      console.error("Failed to update guest stay status:", updateError)
+      toast.error(updateError.message || "Check-in/check-out could not be updated.")
     } finally {
       setBusyBookingId("")
     }
@@ -206,8 +272,20 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
                 <div><dt className="text-muted-foreground">Guests</dt><dd className="font-medium text-foreground">{booking.guests || 1}</dd></div>
                 <div><dt className="text-muted-foreground">Total</dt><dd className="font-medium text-foreground">{formatMoney(booking.totalPrice)}</dd></div>
                 <div><dt className="text-muted-foreground">Payment</dt><dd className="font-medium text-foreground">{booking.paymentStatus || "unpaid"}</dd></div>
+                <div><dt className="text-muted-foreground">Stay status</dt><dd className="font-medium capitalize text-foreground">{(booking.stayStatus || "not_checked_in").replaceAll("_", " ")}</dd></div>
                 <div><dt className="text-muted-foreground">Requested</dt><dd className="font-medium text-foreground">{formatDate(booking.createdAt)}</dd></div>
+                {booking.checkedInAt ? <div><dt className="text-muted-foreground">Checked in</dt><dd className="font-medium text-foreground">{formatTimestamp(booking.checkedInAt)}</dd></div> : null}
+                {booking.checkedOutAt ? <div><dt className="text-muted-foreground">Checked out</dt><dd className="font-medium text-foreground">{formatTimestamp(booking.checkedOutAt)}</dd></div> : null}
               </dl>
+
+              {booking.status === "Cancelled" ? (
+                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                  <p><strong>Cancellation:</strong> {booking.cancellationReason || "Not recorded"}</p>
+                  <p><strong>Manual refund:</strong> {formatMoney(booking.refundAmount)} · {(booking.refundStatus || "not_applicable").replaceAll("_", " ")}{booking.refundDate ? ` · ${formatDate(booking.refundDate)}` : ""}</p>
+                  {booking.refundReason ? <p><strong>Refund reason:</strong> {booking.refundReason}</p> : null}
+                  <p className="mt-1 text-xs">No money is transferred by the app.</p>
+                </div>
+              ) : null}
 
               {booking.specialRequests ? (
                 <p className="mt-3 whitespace-pre-wrap text-sm text-foreground"><strong>Requests:</strong> {booking.specialRequests}</p>
@@ -235,8 +313,22 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
 
               <div className="mt-5 flex flex-wrap gap-2">
                 {!history &&
+                booking.status === "Approved" &&
+                ["owner", "admin", "front-desk"].includes(staffRole) &&
+                (booking.stayStatus || "not_checked_in") !== "checked_out" ? (
+                  <button
+                    type="button"
+                    disabled={busyBookingId === booking.id}
+                    onClick={() => updateStayStatus(booking, booking.stayStatus === "checked_in" ? "check-out" : "check-in")}
+                    className="rounded-lg border border-emerald-300 px-4 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-60"
+                  >
+                    {booking.stayStatus === "checked_in" ? "Mark checked out" : "Mark checked in"}
+                  </button>
+                ) : null}
+                {!history &&
                 !isLegacyHelpdesk &&
                 ownerUid &&
+                ["owner", "admin", "finance"].includes(staffRole) &&
                 booking.paymentStatus === "proof_submitted" ? (
                   <>
                     <button

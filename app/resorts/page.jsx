@@ -1,13 +1,14 @@
 "use client"
 
 import Link from "next/link"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { CheckCircle2, LogOut, MapPin, Search, Star } from "lucide-react"
 import { BRANDING_DEFAULTS } from "@/hooks/use-branding"
 import { useMarketplaceSettings } from "@/hooks/use-marketplace-settings"
 import DynamicHead from "@/components/dynamic-head"
 import { auth, db, googleProvider } from "@/lib/firebase"
-import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth"
+import { getGoogleSignInErrorMessage, signInWithGoogle } from "@/lib/google-sign-in"
+import { getRedirectResult, onAuthStateChanged, signOut } from "firebase/auth"
 import {
   collection,
   doc,
@@ -130,7 +131,7 @@ function resortSortMs(r) {
 function isPublicMarketplaceResortDoc(r) {
   const s = String(r.status || "").trim().toLowerCase()
   const published = r?.published
-  if (s === "pending" || s === "rejected") return false
+  if (s === "pending" || s === "rejected" || s === "archived") return false
   // New workflow: approved resorts must be explicitly published by the resort owner.
   if (s === "approved") return published === true
   // If explicitly unpublished, never list.
@@ -164,6 +165,7 @@ export default function ResortsMarketplacePage() {
   const [category, setCategory] = useState("All")
   const [joinUser, setJoinUser] = useState(null)
   const [joinSubmitting, setJoinSubmitting] = useState(false)
+  const redirectResultHandled = useRef(false)
   const [ownerStatus, setOwnerStatus] = useState("no_record")
   const [ownerDocLoading, setOwnerDocLoading] = useState(false)
   const [resortDocLoading, setResortDocLoading] = useState(false)
@@ -206,7 +208,7 @@ export default function ResortsMarketplacePage() {
         const blocked = new Set()
         snap.docs.forEach((d) => {
           const st = String(d.data()?.status || "").trim().toLowerCase()
-          if (st === "pending" || st === "rejected") blocked.add(d.id)
+          if (st === "pending" || st === "rejected" || st === "archived") blocked.add(d.id)
         })
         setResortDocIds(ids)
         setResortMarketplaceBlockedIds(blocked)
@@ -471,6 +473,35 @@ export default function ResortsMarketplacePage() {
   }, [])
 
   useEffect(() => {
+    if (!auth || redirectResultHandled.current) return
+    redirectResultHandled.current = true
+    getRedirectResult(auth)
+      .then(async (result) => {
+        if (!result?.user) return
+        await setDoc(
+          doc(db, "resortOwners", result.user.uid),
+          {
+            uid: result.user.uid,
+            email: result.user.email ?? "",
+            displayName: result.user.displayName ?? "",
+            photoURL: result.user.photoURL ?? "",
+            role: "owner",
+            status: "pending",
+            updatedAt: serverTimestamp(),
+            createdAt: serverTimestamp(),
+          },
+          { merge: true },
+        )
+        setOwnerStatus("pending")
+        toast.success("Thanks! Your resort account request is submitted for approval.")
+      })
+      .catch((error) => {
+        console.error("Google sign-in redirect failed:", error)
+        toast.error(getGoogleSignInErrorMessage(error))
+      })
+  }, [])
+
+  useEffect(() => {
     if (!joinUser?.uid) {
       setOwnerStatus("no_record")
       setResortStatus("no_record")
@@ -537,8 +568,13 @@ export default function ResortsMarketplacePage() {
 
     setJoinSubmitting(true)
     try {
-      const result = await signInWithPopup(auth, googleProvider)
-      const user = result.user
+      const { result, redirected } = await signInWithGoogle(auth, googleProvider)
+      if (redirected) {
+        toast.info("Your browser blocked the sign-in popup. Continuing with Google sign-in…")
+        return
+      }
+      const user = result?.user
+      if (!user) throw new Error("Google did not return a signed-in account.")
 
       await setDoc(
         doc(db, "resortOwners", user.uid),
@@ -554,12 +590,11 @@ export default function ResortsMarketplacePage() {
         },
         { merge: true },
       )
-
       setOwnerStatus("pending")
       toast.success("Thanks! Your resort account request is submitted for approval.")
     } catch (error) {
       console.error("Join with Google failed", error)
-      toast.error("Google sign-in failed. Please try again.")
+      toast.error(getGoogleSignInErrorMessage(error))
     } finally {
       setJoinSubmitting(false)
     }

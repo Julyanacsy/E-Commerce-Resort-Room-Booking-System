@@ -38,7 +38,7 @@ export function useResortOwnerBranding(ownerUid: string | null) {
             tabTitle: data.tabTitle ?? "",
             favicon: data.favicon ?? "",
           }
-          // Missing keys ≠ “use LuxeStay template” for contact — empty inputs unless saved.
+          // Missing keys do not inherit BayRest contact defaults; only saved resort details are shown.
           if (!("address" in data)) merged.address = ""
           if (!("phone" in data)) merged.phone = ""
           if (!("email" in data)) merged.email = ""

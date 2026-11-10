@@ -21,7 +21,7 @@ export default function AdminSidebar({ currentPage, setCurrentPage, onLogout }: 
   return (
     <div className="w-64 bg-sidebar text-sidebar-foreground border-r border-sidebar-border min-h-screen flex flex-col">
       <div className="p-6 border-b border-sidebar-border">
-        <h1 className="text-2xl font-bold">LuxeStay</h1>
+        <h1 className="text-2xl font-bold">BayRest</h1>
         <p className="text-xs text-sidebar-foreground/60">Admin Portal</p>
       </div>
 

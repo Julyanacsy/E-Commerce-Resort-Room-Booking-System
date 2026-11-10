@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   collection,
   doc,
@@ -8,6 +8,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -15,11 +16,15 @@ import {
 import { db } from "@/lib/firebase"
 import { toast } from "sonner"
 import { auth, googleProvider } from "@/lib/firebase"
-import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth"
+import { onAuthStateChanged, signOut } from "firebase/auth"
+import { getGoogleSignInErrorMessage, signInWithGoogle } from "@/lib/google-sign-in"
 import Link from "next/link"
 import {
   ChevronsLeft,
   ChevronsRight,
+  ArchiveRestore,
+  Download,
+  Search,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -33,6 +38,7 @@ import { Toaster } from "@/components/ui/sonner"
 import { getMapPreviewIframeSrc } from "@/lib/maps-preview-url"
 import { appendSuperAdminAudit, SUPER_ADMIN_AUDIT_COLLECTION } from "@/lib/super-admin-audit"
 import { ALLOWED_SUPER_ADMIN_EMAILS, isAllowedSuperAdminEmail } from "@/lib/allowed-super-admins"
+import ResortEditorModal from "@/components/super-admin/resort-editor-modal"
 import {
   MARKETPLACE_DEFAULTS,
   MARKETPLACE_DOC_ID,
@@ -46,6 +52,7 @@ const STATIC_ADMIN = {
 
 const NAV_ITEMS = [
   { key: "resorts", label: "Resorts", icon: LayoutDashboard },
+  { key: "approvals", label: "Approval queue", icon: LayoutDashboard },
   { key: "audit", label: "Audit log", icon: ScrollText },
   { key: "settings", label: "Settings", icon: Settings },
 ]
@@ -77,8 +84,55 @@ function resortMatchesListFilter(r, filter) {
     case RESORT_FILTER_PUBLISHED:
       return s === "approved" && r.published === true
     default:
-      return true
+      return s !== "archived"
   }
+}
+
+function auditTimestamp(row) {
+  const value = row?.createdAt
+  if (value && typeof value.toDate === "function") return value.toDate()
+  if (value instanceof Date) return value
+  return value ? new Date(value) : null
+}
+
+function auditMatchesDate(date, from, to) {
+  if (!from && !to) return true
+  if (!date || Number.isNaN(date.getTime())) return false
+  const day = [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-")
+  return (!from || day >= from) && (!to || day <= to)
+}
+
+function escapeCsv(value) {
+  const text = String(value ?? "")
+  return `"${text.replaceAll('"', '""')}"`
+}
+
+function downloadAuditCsv(rows) {
+  const columns = ["createdAt", "action", "previousStatus", "newStatus", "resortName", "resortId", "actorEmail", "actorUid", "reason"]
+  const csv = [
+    columns.join(","),
+    ...rows.map((row) =>
+      columns
+        .map((column) => {
+          if (column === "createdAt") {
+            const date = auditTimestamp(row)
+            return escapeCsv(date && !Number.isNaN(date.getTime()) ? date.toISOString() : "")
+          }
+          return escapeCsv(row[column])
+        })
+        .join(","),
+    ),
+  ].join("\r\n")
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }))
+  const anchor = document.createElement("a")
+  anchor.href = url
+  anchor.download = "super-admin-audit-log.csv"
+  anchor.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 function resortUpdatedAtMs(r) {
@@ -236,6 +290,8 @@ export default function SuperAdminPage() {
   const [loading, setLoading] = useState(true)
   const [fireAuthUser, setFireAuthUser] = useState(null)
   const [fireAuthError, setFireAuthError] = useState("")
+  const [googleConnectLoading, setGoogleConnectLoading] = useState(false)
+  const googleConnectInProgress = useRef(false)
   const [mapsModalOpen, setMapsModalOpen] = useState(false)
   const [mapsModalUrl, setMapsModalUrl] = useState("")
   const [mapsPreviewSrc, setMapsPreviewSrc] = useState(null)
@@ -260,9 +316,17 @@ export default function SuperAdminPage() {
   const [mpSaving, setMpSaving] = useState(false)
   const [auditLogs, setAuditLogs] = useState([])
   const [auditLoading, setAuditLoading] = useState(true)
+  const [auditSearch, setAuditSearch] = useState("")
+  const [auditActionFilter, setAuditActionFilter] = useState("all")
+  const [auditActorFilter, setAuditActorFilter] = useState("")
+  const [auditDateFrom, setAuditDateFrom] = useState("")
+  const [auditDateTo, setAuditDateTo] = useState("")
   const [resortListFilter, setResortListFilter] = useState(RESORT_FILTER_TOTAL)
   const [ownerByUid, setOwnerByUid] = useState({})
   const [ownerProfilesReady, setOwnerProfilesReady] = useState(false)
+  const [resortEditor, setResortEditor] = useState(null)
+  const [resortEditorBusy, setResortEditorBusy] = useState(false)
+  const [resortDeleteBusy, setResortDeleteBusy] = useState(false)
 
   useEffect(() => {
     const root = document.documentElement
@@ -466,19 +530,22 @@ export default function SuperAdminPage() {
     let approved = 0
     let rejected = 0
     let published = 0
+    let archived = 0
     for (const r of resorts) {
       const s = String(r.status || "pending").toLowerCase()
       if (s === "pending") pending += 1
       else if (s === "approved") approved += 1
       else if (s === "rejected") rejected += 1
+      else if (s === "archived") archived += 1
       if (s === "approved" && r.published === true) published += 1
     }
     return {
       pending,
       approved,
       rejected,
+      archived,
       published,
-      total: resorts.length,
+      total: resorts.length - archived,
     }
   }, [resorts])
 
@@ -487,6 +554,43 @@ export default function SuperAdminPage() {
     list.sort((a, b) => resortUpdatedAtMs(b) - resortUpdatedAtMs(a))
     return list
   }, [resorts, resortListFilter])
+
+  const pendingResorts = useMemo(
+    () => resorts.filter((resort) => String(resort.status || "pending").toLowerCase() === "pending"),
+    [resorts],
+  )
+
+  const archivedResorts = useMemo(
+    () =>
+      resorts
+        .filter((resort) => String(resort.status || "").toLowerCase() === "archived")
+        .sort((a, b) => resortUpdatedAtMs(b) - resortUpdatedAtMs(a)),
+    [resorts],
+  )
+
+  const filteredAuditLogs = useMemo(() => {
+    const search = auditSearch.trim().toLowerCase()
+    const actor = auditActorFilter.trim().toLowerCase()
+    return auditLogs.filter((row) => {
+      const date = auditTimestamp(row)
+      const textMatches =
+        !search ||
+        [row.resortName, row.resortId, row.action, row.actorEmail, row.actorUid, row.reason]
+          .some((value) => String(value || "").toLowerCase().includes(search))
+      const actionMatches = auditActionFilter === "all" || String(row.action || "").toLowerCase() === auditActionFilter
+      const actorMatches =
+        !actor ||
+        String(row.actorEmail || "").toLowerCase().includes(actor) ||
+        String(row.actorUid || "").toLowerCase().includes(actor)
+      return textMatches && actionMatches && actorMatches && auditMatchesDate(date, auditDateFrom, auditDateTo)
+    })
+  }, [auditLogs, auditSearch, auditActionFilter, auditActorFilter, auditDateFrom, auditDateTo])
+
+  const openResortFilter = (filter) => {
+    setResortListFilter(filter)
+    setCurrentPage("resorts")
+    document.getElementById("all-listings")?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }
 
   const handleLogin = (e) => {
     e.preventDefault()
@@ -526,6 +630,246 @@ export default function SuperAdminPage() {
       toast.error("Failed to save marketplace settings. Check Firestore rules (super admin only).")
     } finally {
       setMpSaving(false)
+    }
+  }
+
+  const handleSaveResort = async (form) => {
+    if (!db || !isAllowedSuperAdminEmail(fireAuthUser?.email) || fireAuthUser.emailVerified !== true) {
+      toast.error("Sign in with a verified, authorized Super Admin Google account to manage listings.")
+      return
+    }
+
+    const ownerUid = String(form.ownerUid || "").trim()
+    const ownerEmail = String(form.ownerEmail || "").trim().toLowerCase()
+    const name = String(form.name || "").trim()
+    const location = String(form.location || "").trim()
+    const mapsUrl = String(form.mapsUrl || "").trim()
+    const listingImage = String(form.listingImage || "").trim()
+    const description = String(form.description || "").trim()
+    const category = String(form.category || "").trim() || "Resort"
+    const tags = [...new Set(String(form.tags || "").split(",").map((tag) => tag.trim()).filter(Boolean))].slice(0, 10)
+    const resortId = resortEditor.resort?.id || ownerUid
+
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(ownerUid)) {
+      toast.error("Enter a valid Firebase Auth UID for the resort owner.")
+      return
+    }
+    if (!name || name.length > 120 || !location || location.length > 240) {
+      toast.error("Resort name and location are required and must be within the length limits.")
+      return
+    }
+    if (
+      !mapsUrl ||
+      mapsUrl.length > 2000 ||
+      !/^https:\/\/(www\.)?(maps\.)?google\.[a-z.]+\/maps|https:\/\/maps\.app\.goo\.gl\/|https:\/\/goo\.gl\/maps\//i.test(mapsUrl)
+    ) {
+      toast.error("Enter a valid Google Maps link.")
+      return
+    }
+    if (ownerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail)) {
+      toast.error("Enter a valid owner email.")
+      return
+    }
+    if (description.length > 2000 || category.length > 80 || tags.some((tag) => tag.length > 50)) {
+      toast.error("Description, category, or tag exceeds the allowed length.")
+      return
+    }
+    if (listingImage) {
+      try {
+        const imageUrl = new URL(listingImage)
+        if (!["http:", "https:"].includes(imageUrl.protocol)) throw new Error("Unsupported image URL.")
+      } catch {
+        toast.error("Listing image must be a valid HTTP or HTTPS URL.")
+        return
+      }
+    }
+
+    setResortEditorBusy(true)
+    try {
+      const resortRef = doc(db, "resorts", resortId)
+      const ownerRef = doc(db, "resortOwners", ownerUid)
+      const now = serverTimestamp()
+      const actor = {
+        actorEmail: fireAuthUser.email || "",
+        actorUid: fireAuthUser.uid || "",
+      }
+
+      if (resortEditor.resort) {
+        const previousStatus = String(resortEditor.resort.status || "pending").toLowerCase()
+        await updateDoc(resortRef, {
+          ownerEmail,
+          name,
+          location,
+          mapsUrl,
+          description,
+          category,
+          listingImage,
+          tags,
+          updatedAt: now,
+        })
+        try {
+          await appendSuperAdminAudit(db, {
+            action: "update",
+            resortId,
+            resortName: name,
+            ownerUid,
+            previousStatus,
+            newStatus: previousStatus,
+            reason: "Listing details updated.",
+            ...actor,
+          })
+        } catch (error) {
+          console.error("Failed to record resort update in audit log:", error)
+          toast.warning("Listing updated, but its audit entry could not be saved.")
+        }
+        toast.success("Resort listing updated.")
+      } else {
+        await runTransaction(db, async (transaction) => {
+          const [resortSnapshot, ownerSnapshot] = await Promise.all([
+            transaction.get(resortRef),
+            transaction.get(ownerRef),
+          ])
+          if (resortSnapshot.exists()) {
+            throw new Error("A resort listing already exists for this owner UID.")
+          }
+          if (!ownerSnapshot.exists()) {
+            throw new Error("This owner has not registered yet. Ask them to sign in on the Marketplace first.")
+          }
+          transaction.set(resortRef, {
+            id: ownerUid,
+            ownerUid,
+            ownerEmail,
+            name,
+            location,
+            mapsUrl,
+            description,
+            category,
+            listingImage,
+            tags,
+            status: "pending",
+            published: false,
+            createdAt: now,
+            updatedAt: now,
+          })
+        })
+        try {
+          await appendSuperAdminAudit(db, {
+            action: "create",
+            resortId,
+            resortName: name,
+            ownerUid,
+            previousStatus: "",
+            newStatus: "pending",
+            reason: "Listing created by Super Admin.",
+            ...actor,
+          })
+        } catch (error) {
+          console.error("Failed to record resort creation in audit log:", error)
+          toast.warning("Listing created, but its audit entry could not be saved.")
+        }
+        toast.success("Resort listing created and sent for approval.")
+      }
+      setResortEditor(null)
+    } catch (error) {
+      console.error("Failed to save resort listing:", error)
+      toast.error(error?.message || "Resort listing could not be saved.")
+    } finally {
+      setResortEditorBusy(false)
+    }
+  }
+
+  const handleDeleteResort = async (resort) => {
+    if (!db || !isAllowedSuperAdminEmail(fireAuthUser?.email) || fireAuthUser.emailVerified !== true) {
+      toast.error("Sign in with a verified, authorized Super Admin Google account to manage listings.")
+      return
+    }
+    const resortName = String(resort.name || "Unnamed resort")
+    if (
+      !window.confirm(
+        `Archive "${resortName}"?\n\nThis hides the listing from the marketplace but keeps it available to restore. The owner profile, rooms, and bookings will remain.`,
+      )
+    ) {
+      return
+    }
+
+    setResortDeleteBusy(true)
+    try {
+      const previousStatus = String(resort.status || "pending").toLowerCase()
+      await updateDoc(doc(db, "resorts", resort.id), {
+        status: "archived",
+        archivedFromStatus: previousStatus,
+        archivedPublished: resort.published === true,
+        archivedAt: serverTimestamp(),
+        published: false,
+        updatedAt: serverTimestamp(),
+      })
+      try {
+        await appendSuperAdminAudit(db, {
+          action: "archive",
+          resortId: resort.id,
+          resortName,
+          ownerUid: resort.ownerUid || resort.id,
+          previousStatus,
+          newStatus: "archived",
+          reason: "Marketplace listing archived; owner profile, rooms, and bookings retained.",
+          actorEmail: fireAuthUser.email || "",
+          actorUid: fireAuthUser.uid || "",
+        })
+      } catch (error) {
+        console.error("Failed to record resort archive in audit log:", error)
+        toast.warning("Listing archived, but its audit entry could not be saved.")
+      }
+      toast.success("Resort listing archived. You can restore it later.")
+    } catch (error) {
+      console.error("Failed to archive resort listing:", error)
+      toast.error(error?.message || "Resort listing could not be archived.")
+    } finally {
+      setResortDeleteBusy(false)
+    }
+  }
+
+  const handleRestoreResort = async (resort) => {
+    if (!db || !isAllowedSuperAdminEmail(fireAuthUser?.email) || fireAuthUser.emailVerified !== true) {
+      toast.error("Sign in with a verified, authorized Super Admin Google account to manage listings.")
+      return
+    }
+
+    setResortDeleteBusy(true)
+    const restoredStatus = ["pending", "approved", "rejected"].includes(
+      String(resort.archivedFromStatus || "").toLowerCase(),
+    )
+      ? String(resort.archivedFromStatus).toLowerCase()
+      : "pending"
+    const published = restoredStatus === "approved" && resort.archivedPublished === true
+    try {
+      await updateDoc(doc(db, "resorts", resort.id), {
+        status: restoredStatus,
+        published,
+        restoredAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+      try {
+        await appendSuperAdminAudit(db, {
+          action: "restore",
+          resortId: resort.id,
+          resortName: String(resort.name || "Unnamed resort"),
+          ownerUid: resort.ownerUid || resort.id,
+          previousStatus: "archived",
+          newStatus: restoredStatus,
+          reason: "Marketplace listing restored from archive.",
+          actorEmail: fireAuthUser.email || "",
+          actorUid: fireAuthUser.uid || "",
+        })
+      } catch (error) {
+        console.error("Failed to record resort restore in audit log:", error)
+        toast.warning("Listing restored, but its audit entry could not be saved.")
+      }
+      toast.success("Resort listing restored.")
+    } catch (error) {
+      console.error("Failed to restore resort listing:", error)
+      toast.error(error?.message || "Resort listing could not be restored.")
+    } finally {
+      setResortDeleteBusy(false)
     }
   }
 
@@ -582,13 +926,23 @@ export default function SuperAdminPage() {
   }
 
   const handleGoogleConnect = async () => {
+    if (googleConnectInProgress.current) return
     if (!auth || !googleProvider) {
       toast.error("Google sign-in is not available right now.")
       return
     }
+
+    googleConnectInProgress.current = true
+    setGoogleConnectLoading(true)
+    setFireAuthError("")
     try {
-      const result = await signInWithPopup(auth, googleProvider)
-      const email = (result.user?.email || "").toLowerCase()
+      const { result, redirected } = await signInWithGoogle(auth, googleProvider)
+      if (redirected) {
+        setFireAuthError("Opening Google sign-in. Choose the authorized account to continue.")
+        return
+      }
+      const email = (result?.user?.email || "").toLowerCase()
+      if (!email) throw new Error("Google did not return a signed-in account.")
       if (!isAllowedSuperAdminEmail(email)) {
         setFireAuthError("This Google account is not authorized for Super Admin access.")
         toast.error("Not authorized for Super Admin.")
@@ -597,8 +951,19 @@ export default function SuperAdminPage() {
       }
       setFireAuthError("")
     } catch (err) {
-      console.error("Super admin Google sign-in failed", err)
-      toast.error("Google sign-in failed.")
+      if (err?.code === "auth/cancelled-popup-request") {
+        const message = "Another Google sign-in request interrupted this one. Please try again and click once."
+        setFireAuthError(message)
+        toast.info(message)
+      } else {
+        console.error("Super admin Google sign-in failed", err)
+        const message = getGoogleSignInErrorMessage(err)
+        setFireAuthError(message)
+        toast.error(message)
+      }
+    } finally {
+      googleConnectInProgress.current = false
+      setGoogleConnectLoading(false)
     }
   }
 
@@ -784,9 +1149,10 @@ export default function SuperAdminPage() {
             <button
               type="button"
               onClick={handleGoogleConnect}
-              className="inline-flex flex-1 items-center justify-center rounded-full bg-emerald-700 px-6 py-3 text-xs font-semibold tracking-[0.2em] uppercase text-white shadow-lg shadow-emerald-700/20 transition hover:-translate-y-0.5 hover:bg-emerald-600"
+              disabled={googleConnectLoading}
+              className="inline-flex flex-1 items-center justify-center rounded-full bg-emerald-700 px-6 py-3 text-xs font-semibold tracking-[0.2em] uppercase text-white shadow-lg shadow-emerald-700/20 transition hover:-translate-y-0.5 hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Continue with Google
+              {googleConnectLoading ? "Connecting..." : "Continue with Google"}
             </button>
             <button
               type="button"
@@ -797,7 +1163,7 @@ export default function SuperAdminPage() {
             </button>
           </div>
           <p className="mt-4 text-xs text-muted-foreground">
-            Note: we’ll later enforce that only approved super admins can connect.
+            Sign in with an authorized Super Admin Google account.
           </p>
         </div>
       </div>
@@ -881,21 +1247,25 @@ export default function SuperAdminPage() {
           } ${sidebarExpanded ? "lg:w-64" : "lg:w-20"}`}
         >
           <div
-            className={`relative flex items-center gap-3 border-b py-6 transition-all duration-300 ${
+            className={`relative flex items-center gap-2.5 border-b py-4 transition-all duration-300 ${
               theme === "dark" ? "border-slate-700" : "border-emerald-800"
-            } ${sidebarExpanded ? "px-5" : "px-3 lg:px-3"}`}
+            } ${sidebarExpanded ? "px-3.5" : "px-2.5 lg:px-2.5"}`}
           >
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-emerald-500/50 bg-white/10">
-              <LayoutDashboard className="h-6 w-6 text-emerald-200" aria-hidden />
+            <div className="flex h-9 w-9 shrink-0 items-center overflow-hidden rounded-full border border-emerald-500/50 bg-white p-0.5 shadow-sm">
+              <img
+                src="/images/super-admin-logo.png"
+                alt="Super Admin"
+                className="h-full w-full object-cover object-left"
+              />
             </div>
             <div
-              className={`overflow-hidden transition-all duration-300 ${
+              className={`min-w-0 overflow-hidden transition-all duration-300 ${
                 mobileSidebarVisible || sidebarExpanded ? "max-w-full opacity-100" : "max-w-0 opacity-0 lg:max-w-0 lg:opacity-0"
               }`}
             >
-              <p className="whitespace-nowrap text-lg font-bold tracking-[0.2em] uppercase">Super Admin</p>
-              <p className="whitespace-nowrap text-[11px] text-emerald-200">Platform review</p>
-              <p className="mt-1 truncate text-[10px] text-emerald-200/70">{fireAuthUser?.email}</p>
+              <p className="whitespace-nowrap text-[10px] font-bold tracking-[0.16em] uppercase">Super Admin</p>
+              <p className="whitespace-nowrap text-[9px] text-emerald-200">Platform review</p>
+              <p className="mt-0.5 truncate text-[8.5px] text-emerald-200/70">{fireAuthUser?.email}</p>
             </div>
             <button
               type="button"
@@ -973,7 +1343,7 @@ export default function SuperAdminPage() {
               >
                 Signed in as
               </p>
-              <p className="whitespace-nowrap font-semibold">{fireAuthUser?.displayName ?? "Super admin"}</p>
+              <p className="whitespace-nowrap font-semibold">Super admin</p>
             </div>
 
             <button
@@ -1027,11 +1397,18 @@ export default function SuperAdminPage() {
         </aside>
 
         <main
-          className={`flex-1 overflow-auto transition-colors duration-300 ${
+          className={`relative isolate flex-1 overflow-auto transition-colors duration-300 ${
             theme === "dark" ? "bg-slate-900" : "bg-background"
           }`}
         >
-          <div className="mx-auto max-w-6xl p-6 lg:p-8">
+          <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center overflow-hidden">
+            <img
+              src="/images/super-admin-logo.png"
+              alt=""
+              className="w-[min(72vw,620px)] max-w-[90%] opacity-[0.045] dark:opacity-[0.035]"
+            />
+          </div>
+          <div className="relative z-10 mx-auto max-w-6xl p-6 lg:p-8">
             <div className="mb-6 flex items-center justify-between gap-3 lg:hidden">
               <button
                 type="button"
@@ -1043,7 +1420,7 @@ export default function SuperAdminPage() {
               </button>
               <div className="flex items-center gap-3 rounded-full border border-emerald-100 bg-white/70 px-4 py-2 shadow-sm dark:border-slate-600 dark:bg-slate-800">
                 <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-900/90 text-white">
-                  <LayoutDashboard className="h-5 w-5" />
+                    <img src="/images/super-admin-logo.png" alt="" className="h-full w-full rounded-full object-cover object-left" />
                 </div>
                 <div className="text-left">
                   <p className={`text-sm font-semibold ${theme === "dark" ? "text-white" : "text-emerald-900"}`}>
@@ -1054,43 +1431,122 @@ export default function SuperAdminPage() {
               </div>
             </div>
 
+            {currentPage === "approvals" && (
+              <div className="space-y-8">
+                <div>
+                  <h1 className={`text-3xl font-bold ${headingClass}`}>Approval queue</h1>
+                  <p className={`mt-1 text-sm ${theme === "dark" ? "text-slate-400" : "text-muted-foreground"}`}>
+                    Review pending resort listings and owner details.
+                  </p>
+                </div>
+                <section className={cardBase}>
+                  <div className="flex items-center justify-between gap-3">
+                    <h2 className={`text-lg font-semibold ${headingClass}`}>Pending resorts</h2>
+                    {loading ? <Badge>Loading…</Badge> : <Badge tone="warn">{pendingResorts.length} pending</Badge>}
+                  </div>
+                  <div className="mt-5 space-y-3">
+                    {pendingResorts.map((resort) => (
+                      <div key={resort.id} className={listRow}>
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0 flex-1">
+                            <p className={`font-semibold ${subText}`}>{resort.name || "Unnamed resort"}</p>
+                            <p className="text-xs text-muted-foreground">{resort.location || "—"}</p>
+                            <SuperAdminOwnerProfile
+                              resort={resort}
+                              ownerDoc={ownerByUid[resort.ownerUid || resort.id]}
+                              ownerProfilesReady={ownerProfilesReady}
+                              theme={theme}
+                            />
+                          </div>
+                          <div className="flex shrink-0 flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openResortActionModal(resort, "approve")}
+                              className="rounded-full bg-emerald-700 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white hover:bg-emerald-600"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openResortActionModal(resort, "reject")}
+                              className="rounded-full border border-red-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-red-700 hover:bg-red-50 dark:border-red-400/40 dark:text-red-300"
+                            >
+                              Reject
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setResortEditor({ resort })}
+                              className="rounded-full border border-emerald-200 px-4 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 dark:border-slate-600 dark:text-emerald-200"
+                            >
+                              Edit
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {!loading && pendingResorts.length === 0 && (
+                      <p className="rounded-xl border border-dashed border-emerald-200 p-8 text-center text-sm text-muted-foreground dark:border-slate-600">
+                        No resorts are waiting for approval.
+                      </p>
+                    )}
+                  </div>
+                </section>
+              </div>
+            )}
+
             {currentPage === "resorts" && (
               <>
                 <div className="mb-8">
                   <h1 className={`text-3xl font-bold ${headingClass}`}>Resorts</h1>
                   <p className={`mt-1 text-sm ${theme === "dark" ? "text-slate-400" : "text-muted-foreground"}`}>
-                    Approve or reject resort submissions. Owners are notified by email when configured.
+                    Create, view, edit, approve, reject, archive, and restore resort marketplace listings.
                   </p>
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setResortEditor({ resort: null })}
+                      className="rounded-full bg-emerald-700 px-5 py-2.5 text-sm font-semibold text-white shadow hover:bg-emerald-600"
+                    >
+                      Create resort listing
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCurrentPage("archive")}
+                      className="inline-flex items-center gap-2 rounded-full border border-emerald-200 px-5 py-2.5 text-sm font-semibold text-emerald-800 hover:bg-emerald-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 dark:border-slate-600 dark:text-emerald-200 dark:hover:bg-slate-700"
+                    >
+                      <ArchiveRestore size={16} aria-hidden="true" />
+                      Recently deleted
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-                  <div className={cardBase}>
-                    <p className={`text-xs font-semibold uppercase tracking-[0.35em] ${cardMuted}`}>Pending</p>
-                    <p className={`mt-2 text-3xl font-bold tabular-nums ${headingClass}`}>{resortStats.pending}</p>
-                  </div>
-                  <div className={cardBase}>
-                    <p className={`text-xs font-semibold uppercase tracking-[0.35em] ${cardMuted}`}>Approved</p>
-                    <p className={`mt-2 text-3xl font-bold tabular-nums ${headingClass}`}>{resortStats.approved}</p>
-                  </div>
-                  <div className={cardBase}>
-                    <p className={`text-xs font-semibold uppercase tracking-[0.35em] ${cardMuted}`}>Rejected</p>
-                    <p className={`mt-2 text-3xl font-bold tabular-nums ${headingClass}`}>{resortStats.rejected}</p>
-                  </div>
-                  <div className={cardBase}>
-                    <p className={`text-xs font-semibold uppercase tracking-[0.35em] ${cardMuted}`}>Published</p>
-                    <p className={`mt-2 text-3xl font-bold tabular-nums ${headingClass}`}>{resortStats.published}</p>
-                    <p className={`mt-1 text-[11px] ${theme === "dark" ? "text-slate-500" : "text-muted-foreground"}`}>
-                      Approved + live on marketplace
-                    </p>
-                  </div>
-                  <div className={cardBase}>
-                    <p className={`text-xs font-semibold uppercase tracking-[0.35em] ${cardMuted}`}>Total</p>
-                    <p className={`mt-2 text-3xl font-bold tabular-nums ${headingClass}`}>{resortStats.total}</p>
-                  </div>
+                  {[
+                    { label: "Pending", value: resortStats.pending, filter: RESORT_FILTER_PENDING },
+                    { label: "Approved", value: resortStats.approved, filter: RESORT_FILTER_APPROVED },
+                    { label: "Rejected", value: resortStats.rejected, filter: RESORT_FILTER_REJECTED },
+                    { label: "Published", value: resortStats.published, filter: RESORT_FILTER_PUBLISHED },
+                    { label: "Total", value: resortStats.total, filter: RESORT_FILTER_TOTAL },
+                  ].map(({ label, value, filter }) => (
+                    <button
+                      type="button"
+                      key={label}
+                      onClick={() => openResortFilter(filter)}
+                      className={`${cardBase} cursor-pointer text-left transition hover:-translate-y-0.5 hover:border-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500`}
+                    >
+                      <p className={`text-xs font-semibold uppercase tracking-[0.35em] ${cardMuted}`}>{label}</p>
+                      <p className={`mt-2 text-3xl font-bold tabular-nums ${headingClass}`}>{value}</p>
+                      {label === "Published" && (
+                        <p className={`mt-1 text-[11px] ${theme === "dark" ? "text-slate-500" : "text-muted-foreground"}`}>
+                          Approved + live on marketplace
+                        </p>
+                      )}
+                    </button>
+                  ))}
                 </div>
 
                 <div className="mt-10">
-                  <section className={cardBase}>
+                  <section id="all-listings" className={`${cardBase} scroll-mt-8`}>
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <h2 className={`text-xl font-bold ${headingClass}`}>All listings</h2>
                       <div className="flex flex-wrap items-center gap-3">
@@ -1122,10 +1578,10 @@ export default function SuperAdminPage() {
                         {loading ? (
                           <Badge>Loading…</Badge>
                         ) : resortListFilter === RESORT_FILTER_TOTAL ? (
-                          <Badge>{resorts.length} total</Badge>
+                          <Badge>{resortStats.total} total</Badge>
                         ) : (
                           <Badge>
-                            {filteredResorts.length} of {resorts.length}
+                            {filteredResorts.length} of {resortStats.total}
                           </Badge>
                         )}
                       </div>
@@ -1163,7 +1619,9 @@ export default function SuperAdminPage() {
                               <div className="mt-2 flex flex-wrap items-center gap-2">
                                 <Badge
                                   tone={
-                                    String(r.status || "pending").toLowerCase() === "approved"
+                                    String(r.status || "pending").toLowerCase() === "archived"
+                                      ? "neutral"
+                                      : String(r.status || "pending").toLowerCase() === "approved"
                                       ? "success"
                                       : String(r.status || "").toLowerCase() === "rejected"
                                         ? "danger"
@@ -1178,33 +1636,66 @@ export default function SuperAdminPage() {
                               </div>
                             </div>
 
-                            <div className="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-center">
-                              {(String(r.status || "pending").toLowerCase() === "pending" ? (
-                                <>
+                            <div className="flex shrink-0 flex-col items-end gap-2">
+                              <div className="flex flex-wrap justify-end gap-2">
+                                {String(r.status || "pending").toLowerCase() === "archived" ? (
+                                  <span className="text-[11px] font-medium text-muted-foreground">Archived</span>
+                                ) : String(r.status || "pending").toLowerCase() === "pending" ? (
+                                  <>
+                                    <button
+                                      onClick={() => openResortActionModal(r, "approve")}
+                                      className="rounded-full bg-emerald-700 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white transition hover:bg-emerald-600"
+                                      type="button"
+                                    >
+                                      Approve
+                                    </button>
+                                    <button
+                                      onClick={() => openResortActionModal(r, "reject")}
+                                      className={`rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-wide transition ${
+                                        theme === "dark"
+                                          ? "border-red-400/50 bg-slate-800 text-red-300 hover:border-red-400"
+                                          : "border-red-200 bg-white text-red-700 hover:border-red-300"
+                                      }`}
+                                      type="button"
+                                    >
+                                      Reject
+                                    </button>
+                                  </>
+                                ) : (
+                                  <span className="text-[11px] font-medium text-muted-foreground sm:text-xs">
+                                    Listing is {String(r.status || "").toLowerCase() || "—"}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setResortEditor({ resort: r })}
+                                  className="rounded-full border border-emerald-200 px-4 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 dark:border-slate-600 dark:text-emerald-200 dark:hover:bg-slate-700"
+                                >
+                                  Edit
+                                </button>
+                                {String(r.status || "").toLowerCase() === "archived" ? (
                                   <button
-                                    onClick={() => openResortActionModal(r, "approve")}
-                                    className="rounded-full bg-emerald-700 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white transition hover:bg-emerald-600"
                                     type="button"
+                                    onClick={() => handleRestoreResort(r)}
+                                    disabled={resortDeleteBusy}
+                                    className="inline-flex items-center gap-1 rounded-full border border-emerald-200 px-4 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-60 dark:border-emerald-400/40 dark:text-emerald-200"
                                   >
-                                    Approve
+                                    <ArchiveRestore size={14} />
+                                    Restore
                                   </button>
+                                ) : (
                                   <button
-                                    onClick={() => openResortActionModal(r, "reject")}
-                                    className={`rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] transition ${
-                                      theme === "dark"
-                                        ? "border-red-400/50 bg-slate-800 text-red-300 hover:border-red-400"
-                                        : "border-red-200 bg-white text-red-700 hover:border-red-300"
-                                    }`}
                                     type="button"
+                                    onClick={() => handleDeleteResort(r)}
+                                    disabled={resortDeleteBusy}
+                                    className="rounded-full border border-red-200 px-4 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-400/40 dark:bg-slate-800 dark:text-red-300"
                                   >
-                                    Reject
+                                    Archive
                                   </button>
-                                </>
-                              ) : (
-                                <span className="text-[11px] font-medium text-muted-foreground sm:text-xs">
-                                  Listing is {String(r.status || "").toLowerCase() || "—"}
-                                </span>
-                              ))}
+                                )}
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -1235,17 +1726,80 @@ export default function SuperAdminPage() {
 
             {currentPage === "audit" && (
               <div className="space-y-8">
-                <div>
-                  <h1 className={`text-3xl font-bold ${headingClass}`}>Audit log</h1>
-                  <p className={`mt-1 text-sm ${theme === "dark" ? "text-slate-400" : "text-muted-foreground"}`}>
-                    Recent approve and reject actions (newest first, last 150 entries).
-                  </p>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h1 className={`text-3xl font-bold ${headingClass}`}>Audit log</h1>
+                    <p className={`mt-1 text-sm ${theme === "dark" ? "text-slate-400" : "text-muted-foreground"}`}>
+                      Search the latest 150 actions by resort, action, admin, and date.
+                    </p>
+                  </div>
                 </div>
 
                 <section className={cardBase}>
-                  <div className="flex items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
                     <h2 className={`text-lg font-semibold ${headingClass}`}>Activity</h2>
-                    {auditLoading ? <Badge>Loading…</Badge> : <Badge>{auditLogs.length} shown</Badge>}
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => downloadAuditCsv(filteredAuditLogs)}
+                        disabled={filteredAuditLogs.length === 0}
+                        className="inline-flex items-center gap-2 rounded-full border border-emerald-200 px-4 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-emerald-200 dark:hover:bg-slate-700"
+                      >
+                        <Download size={15} />
+                        Export CSV
+                      </button>
+                      {auditLoading ? <Badge>Loading…</Badge> : <Badge>{filteredAuditLogs.length} / {auditLogs.length}</Badge>}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                    <label className="relative">
+                      <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                      <input
+                        type="search"
+                        value={auditSearch}
+                        onChange={(event) => setAuditSearch(event.target.value)}
+                        placeholder="Search resort or reason"
+                        className="w-full rounded-lg border border-emerald-200 bg-white py-2 pl-9 pr-3 text-sm text-emerald-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+                      />
+                    </label>
+                    <select
+                      value={auditActionFilter}
+                      onChange={(event) => setAuditActionFilter(event.target.value)}
+                      aria-label="Filter by action"
+                      className="rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+                    >
+                      <option value="all">All actions</option>
+                      {[...new Set(auditLogs.map((row) => String(row.action || "").toLowerCase()).filter(Boolean))].sort().map((action) => (
+                        <option key={action} value={action}>{action}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="search"
+                      value={auditActorFilter}
+                      onChange={(event) => setAuditActorFilter(event.target.value)}
+                      placeholder="Filter admin email or UID"
+                      aria-label="Filter by admin"
+                      className="rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+                    />
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                      From
+                      <input
+                        type="date"
+                        value={auditDateFrom}
+                        onChange={(event) => setAuditDateFrom(event.target.value)}
+                        className="min-w-0 flex-1 rounded-lg border border-emerald-200 bg-white px-2 py-2 text-sm text-emerald-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+                      />
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                      To
+                      <input
+                        type="date"
+                        value={auditDateTo}
+                        onChange={(event) => setAuditDateTo(event.target.value)}
+                        className="min-w-0 flex-1 rounded-lg border border-emerald-200 bg-white px-2 py-2 text-sm text-emerald-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+                      />
+                    </label>
                   </div>
 
                   <div className="mt-4 overflow-x-auto">
@@ -1262,12 +1816,8 @@ export default function SuperAdminPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {auditLogs.map((row) => {
-                          const when = row.createdAt?.toDate
-                            ? row.createdAt.toDate()
-                            : row.createdAt
-                              ? new Date(row.createdAt)
-                              : null
+                        {filteredAuditLogs.map((row) => {
+                          const when = auditTimestamp(row)
                           const whenStr =
                             when && !Number.isNaN(when.getTime())
                               ? when.toLocaleString(undefined, {
@@ -1318,9 +1868,80 @@ export default function SuperAdminPage() {
                       </tbody>
                     </table>
                   </div>
-                  {!auditLoading && auditLogs.length === 0 && (
-                    <p className="mt-4 text-sm text-muted-foreground">No audit entries yet.</p>
+                  {!auditLoading && filteredAuditLogs.length === 0 && (
+                    <p className="mt-4 text-sm text-muted-foreground">
+                      {auditLogs.length ? "No audit entries match these filters." : "No audit entries yet."}
+                    </p>
                   )}
+                </section>
+              </div>
+            )}
+
+            {currentPage === "archive" && (
+              <div className="space-y-8">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <h1 className={`text-3xl font-bold ${headingClass}`}>Recently deleted</h1>
+                    <p className={`mt-1 text-sm ${theme === "dark" ? "text-slate-400" : "text-muted-foreground"}`}>
+                      Archived listings are hidden from the marketplace and can be restored.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Badge>{archivedResorts.length} available to restore</Badge>
+                    <button
+                      type="button"
+                      onClick={() => setCurrentPage("resorts")}
+                      className="rounded-full border border-emerald-200 px-4 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 dark:border-slate-600 dark:text-emerald-200 dark:hover:bg-slate-700"
+                    >
+                      Back to Resorts
+                    </button>
+                  </div>
+                </div>
+
+                <section className={cardBase}>
+                  <div className="space-y-3">
+                    {archivedResorts.map((resort) => {
+                      const archivedAt = resort.archivedAt?.toDate?.()
+                        ?? (resort.archivedAt ? new Date(resort.archivedAt) : null)
+                      const archivedAtLabel =
+                        archivedAt && !Number.isNaN(archivedAt.getTime())
+                          ? archivedAt.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+                          : "Date unavailable"
+                      return (
+                        <div key={resort.id} className={listRow}>
+                          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="min-w-0 flex-1">
+                              <p className={`font-semibold ${subText}`}>{resort.name || "Unnamed resort"}</p>
+                              <p className="text-xs text-muted-foreground">{resort.location || "—"}</p>
+                              <p className="mt-2 text-xs text-muted-foreground">
+                                Archived {archivedAtLabel} · Previous status: {resort.archivedFromStatus || "pending"}
+                              </p>
+                              <SuperAdminOwnerProfile
+                                resort={resort}
+                                ownerDoc={ownerByUid[resort.ownerUid || resort.id]}
+                                ownerProfilesReady={ownerProfilesReady}
+                                theme={theme}
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleRestoreResort(resort)}
+                              disabled={resortDeleteBusy}
+                              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full border border-emerald-200 px-4 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-60 dark:border-emerald-400/40 dark:text-emerald-200"
+                            >
+                              <ArchiveRestore size={15} />
+                              Restore
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                    {!loading && archivedResorts.length === 0 && (
+                      <p className="rounded-xl border border-dashed border-emerald-200 p-8 text-center text-sm text-muted-foreground dark:border-slate-600">
+                        No archived resort listings.
+                      </p>
+                    )}
+                  </div>
                 </section>
               </div>
             )}
@@ -1618,6 +2239,18 @@ export default function SuperAdminPage() {
           </div>
         </main>
       </div>
+
+      {resortEditor && (
+        <ResortEditorModal
+          resort={resortEditor.resort}
+          theme={theme}
+          busy={resortEditorBusy}
+          onClose={() => {
+            if (!resortEditorBusy) setResortEditor(null)
+          }}
+          onSave={handleSaveResort}
+        />
+      )}
 
       {resortActionModal && (
         <div

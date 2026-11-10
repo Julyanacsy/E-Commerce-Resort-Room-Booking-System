@@ -31,8 +31,8 @@ const BRANDING_DOC_ID = "branding"
 const BRANDING_COLLECTION = "settings"
 
 export const BRANDING_DEFAULTS: Branding = {
-  name: "LuxeStay",
-  tagline: "Luxury Hotel & Resort",
+  name: "BayRest",
+  tagline: "Ecommerce Resort Room Booking",
   logo: "",
   favicon: "/icon.svg",
   heroImageUrl: "",
@@ -43,13 +43,22 @@ export const BRANDING_DEFAULTS: Branding = {
     { title: "Expert Service", desc: "Our dedicated staff ensures your stay is memorable and hassle-free." },
     { title: "Best Location", desc: "Centrally located with easy access to major attractions and restaurants." },
   ],
-  tabTitle: "LuxeStay - Luxury Hotel Booking",
+  tabTitle: "BayRest - Ecommerce Resort Room Booking",
   address: "123 Luxury Avenue, City Center",
   phone: "+1 (555) 123-4567",
   email: "info@luxestay.com",
   facebook: "",
   twitter: "",
   linkedin: "",
+}
+
+const mergeBranding = (data: Partial<Branding>): Branding => {
+  const branding = { ...BRANDING_DEFAULTS, ...data }
+  if (branding.name === "LuxeStay") branding.name = BRANDING_DEFAULTS.name
+  if (branding.tabTitle === "LuxeStay - Luxury Hotel Booking") {
+    branding.tabTitle = BRANDING_DEFAULTS.tabTitle
+  }
+  return branding
 }
 
 const broadcastBranding = (payload: Branding) => {
@@ -75,10 +84,7 @@ const readBrandingFromFirestore = async (): Promise<Branding> => {
     if (brandingSnap.exists()) {
       const data = brandingSnap.data()
       console.log("✅ Branding loaded from Firestore:", data)
-      return {
-        ...BRANDING_DEFAULTS,
-        ...data,
-      }
+      return mergeBranding(data)
     }
     console.log("ℹ️ No branding document found in Firestore, using defaults")
     return BRANDING_DEFAULTS
@@ -151,10 +157,7 @@ export const useBranding = () => {
       (snapshot) => {
         if (snapshot.exists()) {
           const data = snapshot.data() as Branding
-          const updatedBranding = {
-            ...BRANDING_DEFAULTS,
-            ...data,
-          }
+          const updatedBranding = mergeBranding(data)
           setBranding(updatedBranding)
           broadcastBranding(updatedBranding)
         } else {
@@ -211,5 +214,4 @@ export const useBranding = () => {
 export const resetBranding = async () => {
   await persistBranding(BRANDING_DEFAULTS)
 }
-
 

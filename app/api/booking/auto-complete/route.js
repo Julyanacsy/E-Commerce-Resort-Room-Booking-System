@@ -4,12 +4,16 @@ import {
   canManageBooking,
   getManilaDate,
   getBookingDb,
+  hasBookingPermission,
   jsonFailure,
 } from "@/lib/booking-api-server"
 
 export async function POST(request) {
   const authResult = await authenticateBookingAdmin(request)
   if (authResult.error) return jsonFailure(authResult.error, authResult.status)
+  if (!hasBookingPermission(authResult.user, "booking")) {
+    return jsonFailure("Your staff role cannot complete bookings.", 403)
+  }
   const db = getBookingDb()
   if (!db) return jsonFailure("Firebase Admin credentials are not configured.", 503)
 
@@ -19,7 +23,7 @@ export async function POST(request) {
       ? await db.collection("guestbooking").where("status", "==", "Approved").limit(1000).get()
       : await db
           .collection("guestbooking")
-          .where("ownerUid", "==", user.uid)
+          .where("ownerUid", "==", user.ownerUid)
           .limit(1000)
           .get()
     const today = getManilaDate()

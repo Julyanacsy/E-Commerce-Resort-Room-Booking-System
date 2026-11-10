@@ -1,4 +1,3 @@
-import crypto from "node:crypto"
 import {
   getResortAdminMailDisplayName,
   resolveAdminInboxEmail,
@@ -7,11 +6,13 @@ import {
 import {
   datesBetween,
   findRoomForTenant,
+  getBookingDateLockId,
   getBookedDates,
   getBookingDb,
   getLegacyRoomOwnerUid,
   getManilaDate,
   getRoomKey,
+  hasActiveBookingConflict,
   normalizeDate,
   overlaps,
 } from "@/lib/booking-api-server"
@@ -47,6 +48,7 @@ export async function POST(request) {
   const otp = String(body?.otp || "").trim()
   const ownerUid = normalizeOwnerUid(body?.ownerUid)
   const specialRequests = String(body?.specialRequests || "").trim().slice(0, 2000)
+  const cancellationTermsAcknowledged = body?.cancellationTermsAcknowledged === true
 
   if (
     !name ||
@@ -60,6 +62,7 @@ export async function POST(request) {
     !checkIn ||
     !checkOut ||
     checkIn >= checkOut ||
+    !cancellationTermsAcknowledged ||
     !Number.isInteger(guests) ||
     guests < 1 ||
     guests > 20 ||
@@ -117,7 +120,7 @@ export async function POST(request) {
     const legacyUid = await getLegacyRoomOwnerUid(db)
     const lockRefs = stayDates.map((date) =>
       db.collection("bookingDateLocks").doc(
-        crypto.createHash("sha256").update(`${roomKey}\n${date}`).digest("hex"),
+        getBookingDateLockId(roomKey, date),
       ),
     )
     const bookingData = {
@@ -133,6 +136,7 @@ export async function POST(request) {
       nights,
       pricePerNight,
       totalPrice,
+      cancellationTermsAcknowledgedAt: new Date(),
       status: "Pending",
       paymentStatus: ownerUid ? "proof_submitted" : "unpaid",
       ...(ownerUid
@@ -158,22 +162,11 @@ export async function POST(request) {
       const existing = await transaction.get(
         db.collection("guestbooking").where("roomType", "==", roomType),
       )
-      const tenantBookings = existing.docs.filter((snapshot) => {
-        const data = snapshot.data()
-        const bookingOwner = normalizeOwnerUid(data.ownerUid)
-        const belongs =
-          !ownerUid
-            ? !bookingOwner
-            : legacyUid === ownerUid
-              ? !bookingOwner || bookingOwner === ownerUid
-              : bookingOwner === ownerUid
-        return belongs && (data.status === "Pending" || data.status === "Approved" || !data.status)
-      })
       if (
-        tenantBookings.some((snapshot) => {
-          const data = snapshot.data()
-          return overlaps(checkIn, checkOut, data.checkIn, data.checkOut)
-        })
+        hasActiveBookingConflict(
+          existing.docs.map((snapshot) => snapshot.data()),
+          { checkIn, checkOut, ownerUid, legacyUid },
+        )
       ) {
         throw new Error("DATES_UNAVAILABLE")
       }

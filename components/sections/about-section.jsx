@@ -8,7 +8,7 @@ export default function AboutSection() {
           <div>
             <h3 className="text-2xl font-bold text-primary mb-4">Our Mission</h3>
             <p className="text-muted-foreground leading-relaxed mb-4">
-              At LuxeStay, our mission is to provide unforgettable hospitality experiences by offering premium
+              At BayRest, our mission is to provide unforgettable hospitality experiences by offering premium
               accommodations combined with exceptional service. We believe every guest deserves to feel valued and
               pampered during their stay.
             </p>
@@ -25,7 +25,7 @@ export default function AboutSection() {
         </div>
 
         <div className="mt-12 p-8 bg-card rounded-xl">
-          <h3 className="text-xl font-bold text-foreground mb-4">Why Choose LuxeStay?</h3>
+          <h3 className="text-xl font-bold text-foreground mb-4">Why Choose BayRest?</h3>
           <ul className="space-y-3">
             <li className="flex items-start gap-3">
               <span className="text-accent text-xl">✓</span>

@@ -8,7 +8,7 @@ A modern, full-featured resort booking management system built with Next.js and 
 - 📅 **Booking System** - Real-time booking with date availability checking
 - 💳 **Manual GCash Payments** - Resort QR payments with owner verification
 - 📧 **Email Notifications** - Automated email notifications for bookings
-- 👤 **Admin Dashboard** - Comprehensive admin panel for managing bookings, rooms, and settings
+- 👤 **Admin Dashboard** - Owner and role-based staff panel for bookings, rooms, payments, and settings
 - 📱 **PWA Support** - Progressive Web App with offline functionality
 - 🔐 **OTP Verification** - Email-based OTP verification for bookings
 - 📊 **Analytics Dashboard** - Revenue tracking and booking analytics
@@ -17,7 +17,7 @@ A modern, full-featured resort booking management system built with Next.js and 
 
 ## Tech Stack
 
-- **Framework**: Next.js 14
+- **Framework**: Next.js 16
 - **Database**: Firebase Firestore
 - **Authentication**: Firebase Auth
 - **Payment**: Manual GCash QR
@@ -108,6 +108,8 @@ pnpm dev
 6. Booking saved to Firestore
 7. Admin receives email notification
 
+The booking total is calculated and validated by the server from the selected room rate and stay dates. The guest must acknowledge that cancellation and refund terms are set by the resort and should be confirmed directly before payment. Availability is checked again inside a Firestore transaction; per-night lock documents prevent simultaneous requests from reserving the same room type and dates.
+
 ### Admin Dashboard
 - **Overview**: Revenue charts, booking statistics
 - **Manage Bookings**: Approve, decline, cancel bookings
@@ -116,6 +118,11 @@ pnpm dev
 - **Feedback**: Publish/hide guest feedback
 - **Brand Settings**: Customize branding and contact info
 - **Payments**: Review payments, download booking invoices, export an Excel-compatible payment report, and review payment history
+- **Booking Calendar**: View room availability by day and see occupied room types
+- **Check-in / Check-out**: Record arrival and departure with timestamps
+- **Email Reminders**: Booking confirmations, check-in instructions, and post-stay follow-ups
+- **Cancellations / Refunds**: Record cancellation reasons and manually track refund amounts, dates, and statuses
+- **Staff Accounts**: Invite verified Google accounts with Admin, Front desk, or Finance permissions
 
 ### Rooms
 Room documents are stored in the Firestore `rooms` collection. Each room uses these fields:
@@ -160,6 +167,11 @@ Booking documents are stored in the Firestore `guestbooking` collection and are 
 | `paymentAmount` | number | Amount recorded as paid |
 | `paymentSource` | string | `walk-in` for walk-in bookings created in Payment management |
 | `paymentReviewedAt`, `paymentReviewedBy` | timestamp, string | When and by whom the payment was recorded or reviewed |
+| `stayStatus` | string | `not_checked_in`, `checked_in`, or `checked_out` |
+| `checkedInAt`, `checkedOutAt` | Firestore timestamp | Recorded arrival and departure times |
+| `cancellationReason` | string | Reason recorded when a booking is cancelled |
+| `refundAmount`, `refundDate`, `refundStatus`, `refundReason` | number, date, string, string | Manual refund tracking; no refund is sent by the app |
+| `reminderEmails` | map | Idempotency state for scheduled confirmation, arrival, and follow-up emails |
 | `ownerUid` | string | Resort owner's Firebase Auth UID; omitted for legacy marketplace bookings |
 | `proofOfPaymentImage` | string | Compressed payment-proof image data URL |
 | `validIdImage` | string | Compressed guest-ID data URL; readable only by the owning resort |
@@ -176,16 +188,44 @@ The resort owner document `resortOwners/{ownerUid}` stores:
 | --- | --- | --- |
 | `gcashQrImage` | string | Compressed embedded PNG/JPG data URL; kept below 500 KB |
 | `paymentInstructions` | string | Optional instructions displayed on the guest booking form |
+| `checkInInstructions` | string | Arrival details included in the scheduled check-in reminder |
 
 Guests on an owner-specific booking site upload payment proof and one valid ID before requesting the email OTP. The booking starts with `paymentStatus: proof_submitted`; the owning resort verifies it and marks it `paid` or `rejected`. In Admin → Payments, an owner can also record cash received for an existing booking or create an approved, fully paid walk-in booking. Walk-in dates are checked and locked against other bookings, and the total is calculated from the room's saved price and discount. The public booking form receives only the QR image and payment instructions. Valid IDs are only returned to the matching resort owner and are deleted when a booking is completed.
 
-Payment proof submissions, GCash reviews, cash receipts, and walk-in payments are appended to the server-only `paymentHistory` collection. The Payments tab can filter activity by date range, view a monthly summary of received payments split by GCash and cash, download an invoice PDF per booking, and export the filtered history as a UTF-8 CSV that opens in Excel. Firestore client access to payment history is denied; the authenticated server API scopes records to the signed-in resort owner.
+Payment proof submissions, GCash reviews, cash receipts, walk-in payments, and recorded refunds are appended to the server-only `paymentHistory` collection. Payment history supports date, method, and status filters; monthly gross receipts, refunds, net receipts, and an outstanding balance summary; and Excel-compatible CSV export. Invoices show the booking charge, while downloadable PDF receipts show the actual recorded payment amount, method, and date. Firestore client access to payment history is denied; the authenticated server API scopes records to the resort owner and assigned staff role.
+
+### Resort Operations and Staff
+The Booking Calendar displays active reservations and available room types by date. Approved bookings can be marked checked in and checked out; the server records the actor and timestamp. Cancelling a booking requires a reason and supports manual refund tracking. Refund records are operational notes only: this project has no payment processor and cannot transfer or return funds.
+
+Owners can invite staff by email from Admin → Staff Accounts. Invited staff must sign in with their own verified Google account. Admin staff can manage booking operations and payments; Front desk staff can manage bookings, calendar, check-in/out, and walk-ins; Finance staff can review payment history, receipts, and refunds. Valid guest IDs remain viewable only by the resort owner.
+
+Email confirmations are sent when a booking is approved. A daily Vercel Cron job sends check-in instructions one day before arrival and a follow-up after checkout. Configure `CRON_SECRET` alongside the existing email variables; set it in the deployment environment. SMS reminders are not enabled.
 
 ### PWA Features
 - Offline support with service worker
 - Background sync for form submissions
 - Installable on mobile and desktop
 - Offline data caching
+
+### Tests
+
+Run the booking rules and permission tests with:
+
+```bash
+npm test
+```
+
+### Image Storage Roadmap
+
+Room photos, resort GCash QR images, payment proofs, and guest IDs currently use compressed data URLs in Firestore documents. This keeps uploads simple but increases document size and read costs. A future Firebase Storage migration should:
+
+1. Add authenticated, server-authorized uploads under tenant-scoped paths; guest ID and payment-proof paths must remain private to the owning resort.
+2. Save Storage object paths and small metadata in Firestore instead of image data URLs. Public room photos and QR codes should be separated from private guest documents.
+3. Update upload, preview, admin review, email, and deletion flows to use short-lived authorized URLs or server-proxied reads where access is private.
+4. Migrate existing images in batches, verify each uploaded object and its tenant permissions, then switch reads before removing old Firestore fields.
+5. Add lifecycle cleanup for abandoned uploads and completed-booking IDs, and retain a rollback window before deleting legacy data.
+
+Do not delete existing data URLs until migration verification, tenant access tests, and a rollback plan are complete.
 
 ## Deployment
 

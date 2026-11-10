@@ -1,7 +1,7 @@
 {
-  "name": "LuxeStay - Hotel Booking System",
-  "short_name": "LuxeStay",
-  "description": "Luxury Hotel Booking and Management System",
+  "name": "BayRest - Ecommerce Resort Room Booking",
+  "short_name": "BayRest",
+  "description": "Ecommerce Resort Room Booking",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
@@ -52,4 +52,3 @@
     }
   ]
 }
-

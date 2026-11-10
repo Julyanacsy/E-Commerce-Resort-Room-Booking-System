@@ -30,7 +30,7 @@ export default function AdminLogin({ onLogin }: AdminLoginProps) {
     <div className="min-h-screen flex items-center justify-center px-4 py-12">
       <div className="max-w-md w-full">
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-primary mb-2">LuxeStay</h1>
+          <h1 className="text-4xl font-bold text-primary mb-2">BayRest</h1>
           <p className="text-muted-foreground">Admin Portal</p>
         </div>
 

@@ -195,7 +195,7 @@ export default function PWAInstallButton({ variant = "default", className = "" }
       <div className="fixed bottom-0 left-0 right-0 z-50 bg-emerald-700 text-white p-4 shadow-lg">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex-1 text-center sm:text-left">
-            <p className="font-semibold text-sm">Install LuxeStay App</p>
+            <p className="font-semibold text-sm">Install BayRest App</p>
             <p className="text-xs text-emerald-100">Get quick access and work offline</p>
           </div>
           <div className="flex items-center gap-2">
@@ -236,4 +236,3 @@ export default function PWAInstallButton({ variant = "default", className = "" }
     </>
   )
 }
-

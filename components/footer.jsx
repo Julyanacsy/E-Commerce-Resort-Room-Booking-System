@@ -6,7 +6,7 @@ export default function Footer() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
           <div>
-            <h3 className="text-lg font-bold mb-4">LuxeStay</h3>
+            <h3 className="text-lg font-bold mb-4">BayRest</h3>
             <p className="text-primary-foreground/80 text-sm">
               Your premier destination for luxury accommodations and exceptional hospitality.
             </p>
@@ -65,7 +65,7 @@ export default function Footer() {
         </div>
 
         <div className="border-t border-primary-foreground/20 pt-8 text-center text-sm">
-          <p>© 2025 LuxeStay. All rights reserved.</p>
+          <p>© 2025 BayRest. All rights reserved.</p>
         </div>
       </div>
     </footer>

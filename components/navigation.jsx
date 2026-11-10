@@ -29,7 +29,7 @@ export default function Navigation() {
           {/* Logo */}
           <div className="flex-shrink-0">
             <Link href="/" className="text-2xl font-bold text-primary">
-              LuxeStay
+              BayRest
             </Link>
           </div>
 

@@ -6,8 +6,8 @@ const BRANDING_DOC_ID = "branding"
 const BRANDING_COLLECTION = "settings"
 
 const BRANDING_DEFAULTS = {
-  name: "LuxeStay",
-  shortName: "LuxeStay",
+  name: "BayRest",
+  shortName: "BayRest",
   logo: "/icon.svg",
   favicon: "/icon.svg",
 }
@@ -31,11 +31,12 @@ export async function GET() {
       
       if (brandingSnap.exists()) {
         const data = brandingSnap.data()
+        const name = data.name === "LuxeStay" ? BRANDING_DEFAULTS.name : data.name || BRANDING_DEFAULTS.name
         const rawLogo = data.logo || data.favicon || BRANDING_DEFAULTS.logo
         const rawFav = data.favicon || data.logo || BRANDING_DEFAULTS.favicon
         branding = {
-          name: data.name || BRANDING_DEFAULTS.name,
-          shortName: data.name?.split(" ")[0] || BRANDING_DEFAULTS.shortName,
+          name,
+          shortName: name.split(" ")[0] || BRANDING_DEFAULTS.shortName,
           logo: manifestIconSrc(rawLogo),
           favicon: manifestIconSrc(rawFav),
         }
@@ -47,9 +48,9 @@ export async function GET() {
 
     // Generate dynamic manifest
     const manifest = {
-      name: `${branding.name} - Hotel Booking System`,
+      name: `${branding.name} - Ecommerce Resort Room Booking`,
       short_name: branding.shortName,
-      description: `${branding.name} - Luxury Hotel Booking and Management System`,
+      description: `${branding.name} - Ecommerce Resort Room Booking`,
       start_url: "/",
       display: "standalone",
       background_color: "#ffffff",
@@ -120,9 +121,9 @@ export async function GET() {
     // Return default manifest on error
     return NextResponse.json(
       {
-        name: "LuxeStay - Hotel Booking System",
-        short_name: "LuxeStay",
-        description: "Luxury Hotel Booking and Management System",
+        name: "BayRest - Ecommerce Resort Room Booking",
+        short_name: "BayRest",
+        description: "Ecommerce Resort Room Booking",
         start_url: "/",
         display: "standalone",
         background_color: "#ffffff",
@@ -144,4 +145,3 @@ export async function GET() {
     )
   }
 }
-

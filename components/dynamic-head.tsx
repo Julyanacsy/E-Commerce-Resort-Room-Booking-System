@@ -15,7 +15,11 @@ export default function DynamicHead({ brandingOverride = null }: Props) {
   const branding = brandingOverride ?? globalBranding
 
   useEffect(() => {
-    const siteSuffix = String(mp.siteTabTitle || '').trim()
+    const storedSiteSuffix = String(mp.siteTabTitle || '').trim()
+    const siteSuffix =
+      storedSiteSuffix === 'LuxeStay - Luxury Hotel Booking'
+        ? 'BayRest - Ecommerce Resort Room Booking'
+        : storedSiteSuffix
     const fav =
       String(mp.siteFaviconUrl || '').trim() ||
       String(mp.navLogoUrl || '').trim() ||
@@ -28,7 +32,7 @@ export default function DynamicHead({ brandingOverride = null }: Props) {
       document.title =
         siteSuffix ||
         (branding.tabTitle ? String(branding.tabTitle) : '') ||
-        'LuxeStay'
+        'BayRest - Ecommerce Resort Room Booking'
     }
 
     let faviconLink = document.querySelector("link[rel='icon']") as HTMLLinkElement
@@ -58,7 +62,7 @@ export default function DynamicHead({ brandingOverride = null }: Props) {
       appleTitleMeta.name = 'apple-mobile-web-app-title'
       document.head.appendChild(appleTitleMeta)
     }
-    appleTitleMeta.content = branding.name || 'LuxeStay'
+    appleTitleMeta.content = branding.name || 'BayRest'
   }, [
     brandingOverride,
     branding.name,

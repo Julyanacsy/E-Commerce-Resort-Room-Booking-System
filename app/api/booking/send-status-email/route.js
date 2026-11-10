@@ -3,6 +3,7 @@ import {
   authenticateBookingAdmin,
   canManageBooking,
   getBookingDb,
+  hasBookingPermission,
   jsonFailure,
 } from "@/lib/booking-api-server"
 import { renderBookingEmailLayout } from "@/lib/booking-email-layout"
@@ -23,6 +24,12 @@ export async function POST(request) {
   const type = String(body?.type || "booking").trim()
   if (!bookingId) return jsonFailure("Booking ID is required.", 400)
   if (!["booking", "payment"].includes(type)) return jsonFailure("Email type is invalid.", 400)
+  if (
+    !hasBookingPermission(authResult.user, type === "booking" ? "booking" : "payment") &&
+    !(type === "payment" && hasBookingPermission(authResult.user, "booking"))
+  ) {
+    return jsonFailure("Your staff role cannot send this email.", 403)
+  }
 
   try {
     const snapshot = await db.collection("guestbooking").doc(bookingId).get()
@@ -54,6 +61,7 @@ export async function POST(request) {
           }[status]
     if (!message) return jsonFailure("No status email is available for this booking.", 400)
 
+    if (!booking.email) return jsonFailure("This booking has no guest email address.", 409)
     await mail.transporter.sendMail({
       from: `"${mail.brandName}" <${mail.user}>`,
       to: booking.email,
@@ -67,6 +75,16 @@ export async function POST(request) {
         brandName: mail.brandName,
       }),
     })
+    if (type === "booking" && status === "Approved") {
+      await db.collection("guestbooking").doc(bookingId).update({
+        confirmationEmailSentAt: new Date(),
+        confirmationEmailSentBy: authResult.user.uid,
+        "reminderEmails.confirmation": {
+          status: "sent",
+          sentAt: new Date(),
+        },
+      })
+    }
     return Response.json({ success: true })
   } catch (error) {
     console.error("Failed to send booking status email:", error)

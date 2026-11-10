@@ -19,14 +19,14 @@ import PWARegister from "@/components/pwa-register"
 import OfflineIndicator from "@/components/offline-indicator"
 
 export const metadata = {
-  title: "LuxeStay - Luxury Hotel Booking",
-  description: "Book your luxury hotel stay with LuxeStay. Premium accommodations with world-class service.",
+  title: "BayRest - Ecommerce Resort Room Booking",
+  description: "Discover and book resort rooms with BayRest.",
   manifest: "/manifest.json",
   themeColor: "#059669",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "LuxeStay",
+    title: "BayRest",
   },
   viewport: {
     width: "device-width",
@@ -47,7 +47,7 @@ export default function RootLayout({ children }) {
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-        <meta name="apple-mobile-web-app-title" content="LuxeStay" />
+        <meta name="apple-mobile-web-app-title" content="BayRest" />
       </head>
       <body className="antialiased text-foreground bg-background">
         <PWARegister />
