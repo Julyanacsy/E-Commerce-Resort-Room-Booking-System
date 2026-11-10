@@ -30,6 +30,17 @@ export type Branding = {
 const BRANDING_DOC_ID = "branding"
 const BRANDING_COLLECTION = "settings"
 
+const getErrorDetails = (error: unknown) => {
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      code: "code" in error ? error.code : undefined,
+      stack: error.stack,
+    }
+  }
+  return { message: String(error) }
+}
+
 export const BRANDING_DEFAULTS: Branding = {
   name: "BayRest",
   tagline: "Ecommerce Resort Room Booking",
@@ -90,10 +101,7 @@ const readBrandingFromFirestore = async (): Promise<Branding> => {
     return BRANDING_DEFAULTS
   } catch (error) {
     console.error("❌ Failed to read branding from Firestore", error)
-    console.error("Error details:", {
-      message: error.message,
-      code: error.code,
-    })
+    console.error("Error details:", getErrorDetails(error))
     return BRANDING_DEFAULTS
   }
 }
@@ -118,11 +126,7 @@ export const persistBranding = async (payload: Branding): Promise<void> => {
     broadcastBranding(payload)
   } catch (error) {
     console.error("❌ Failed to save branding to Firestore:", error)
-    console.error("Error details:", {
-      message: error.message,
-      code: error.code,
-      stack: error.stack,
-    })
+    console.error("Error details:", getErrorDetails(error))
     throw error
   }
 }
@@ -214,4 +218,3 @@ export const useBranding = () => {
 export const resetBranding = async () => {
   await persistBranding(BRANDING_DEFAULTS)
 }
-

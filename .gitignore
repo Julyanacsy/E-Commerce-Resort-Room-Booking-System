@@ -52,7 +52,6 @@ Thumbs.db
 .DS_Store
 
 # PWA
-**/public/sw.js
 **/public/workbox-*.js
 **/public/worker-*.js
 **/public/sw.js.map
@@ -67,4 +66,3 @@ firestore-debug.log
 # Logs
 logs
 *.log
-
