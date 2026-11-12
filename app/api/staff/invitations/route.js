@@ -1,11 +1,15 @@
+import { getAdminAuth } from "@/lib/firebase-admin"
+import { isApprovedStaffInvitation } from "@/lib/booking-domain.mjs"
 import { resolveCentralEnvMail } from "@/lib/central-env-mail"
 import {
   authenticateBookingAdmin,
   getBookingDb,
+  getStaffInvitationIndexError,
   jsonFailure,
 } from "@/lib/booking-api-server"
 
 const STAFF_ROLES = new Set(["admin", "front-desk", "finance"])
+const EMAIL_PATTERN = /^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -15,6 +19,32 @@ function escapeHtml(value) {
     '"': "&quot;",
     "'": "&#39;",
   })[character])
+}
+
+function getPublicBaseUrl() {
+  const explicit = String(process.env.NEXT_PUBLIC_APP_URL || "").trim()
+  if (explicit) return explicit.replace(/\/$/, "")
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`
+  return "http://localhost:3000"
+}
+
+function getRoleLabel(role) {
+  if (role === "front-desk") return "Front desk"
+  if (role === "finance") return "Finance"
+  return "Admin"
+}
+
+async function getRegisteredUser(adminAuth, email) {
+  try {
+    return await adminAuth.getUserByEmail(email)
+  } catch (error) {
+    if (error?.code === "auth/user-not-found") return null
+    throw error
+  }
+}
+
+function isPendingInvitation(invitation) {
+  return String(invitation?.status || "").toLowerCase() === "pending"
 }
 
 export async function GET(request) {
@@ -35,8 +65,11 @@ export async function GET(request) {
         const invitation = item.data()
         return {
           email: String(invitation.email || item.id),
+          name: String(invitation.name || ""),
+          contact: String(invitation.contact || ""),
           role: String(invitation.role || ""),
-          active: invitation.active === true,
+          status: String(invitation.status || (invitation.active === true ? "approved" : "revoked")),
+          active: isApprovedStaffInvitation(invitation),
           invitedAt: invitation.createdAt?.toDate?.().toISOString() || null,
         }
       })
@@ -54,7 +87,9 @@ export async function POST(request) {
   if (!authResult.user.isOwner) return jsonFailure("Only the resort owner can manage staff.", 403)
 
   const db = getBookingDb()
-  if (!db) return jsonFailure("Firebase Admin credentials are not configured.", 503)
+  const adminAuth = getAdminAuth()
+  if (!db || !adminAuth) return jsonFailure("Firebase Admin credentials are not configured.", 503)
+
   let body
   try {
     body = await request.json()
@@ -62,62 +97,217 @@ export async function POST(request) {
     return jsonFailure("Invalid JSON request.", 400)
   }
 
-  const action = String(body?.action || "invite")
+  const action = String(body?.action || "")
   const email = String(body?.email || "").trim().toLowerCase()
   const role = String(body?.role || "").trim()
-  if (!/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(email) || email.length > 254) {
+  if (!EMAIL_PATTERN.test(email) || email.length > 254) {
     return jsonFailure("Enter a valid staff email address.", 400)
   }
   if (action === "invite" && !STAFF_ROLES.has(role)) {
     return jsonFailure("Choose a valid staff role.", 400)
   }
-  if (!["invite", "revoke"].includes(action)) return jsonFailure("Staff action is invalid.", 400)
+  if (!["lookup", "invite", "approve", "revoke"].includes(action)) {
+    return jsonFailure("Staff action is invalid.", 400)
+  }
+
+  const ownerUid = authResult.user.ownerUid
+  const invitationRef = db
+    .collection("resortOwners")
+    .doc(ownerUid)
+    .collection("staffInvitations")
+    .doc(email)
 
   try {
-    const invitationRef = db
-      .collection("resortOwners")
-      .doc(authResult.user.ownerUid)
-      .collection("staffInvitations")
-      .doc(email)
-    if (action === "revoke") {
-      await invitationRef.set({
+    if (action === "lookup") {
+      const registeredUser = await getRegisteredUser(adminAuth, email)
+      return Response.json({ registered: Boolean(registeredUser) })
+    }
+
+    if (action === "invite") {
+      const [registeredUser, existingInvitation, matches] = await Promise.all([
+        getRegisteredUser(adminAuth, email),
+        invitationRef.get(),
+        db.collectionGroup("staffInvitations").where("email", "==", email).get(),
+      ])
+      const name = String(body?.name || "").trim()
+      const contact = String(body?.contact || "").trim()
+      if (name.length > 100 || contact.length > 100) {
+        return jsonFailure("Name and contact details must be 100 characters or fewer.", 400)
+      }
+      if (!registeredUser && (!name || !contact)) {
+        return jsonFailure("Enter the new staff member's name and contact details.", 400)
+      }
+
+      const ownerAccount = registeredUser
+        ? await db.collection("resortOwners").doc(registeredUser.uid).get()
+        : null
+      if (ownerAccount?.exists) {
+        return jsonFailure("A resort owner account cannot be converted into staff.", 409)
+      }
+
+      const currentInvitation = existingInvitation.exists ? existingInvitation.data() : null
+      if (currentInvitation && (isPendingInvitation(currentInvitation) || isApprovedStaffInvitation(currentInvitation))) {
+        return jsonFailure("This email already has a pending or approved staff record.", 409)
+      }
+
+      const alreadyAssignedElsewhere = matches.docs.some((item) => {
+        const invitation = item.data()
+        return invitation.ownerUid !== ownerUid
+          && (isPendingInvitation(invitation) || isApprovedStaffInvitation(invitation))
+      })
+      if (alreadyAssignedElsewhere) {
+        return jsonFailure("This account already has staff access at another resort.", 409)
+      }
+
+      let staffUser = registeredUser
+      let createdAuthUser = false
+      if (!staffUser) {
+        staffUser = await adminAuth.createUser({
+          email,
+          displayName: name,
+          emailVerified: false,
+        })
+        createdAuthUser = true
+      }
+
+      const staffName = name || staffUser.displayName || ""
+      try {
+        await invitationRef.set({
+          email,
+          uid: staffUser.uid,
+          name: staffName,
+          contact,
+          ownerUid,
+          role,
+          status: "pending",
+          active: false,
+          createdAt: new Date(),
+          createdBy: authResult.user.uid,
+          updatedAt: new Date(),
+        })
+      } catch (error) {
+        if (createdAuthUser) {
+          try {
+            await adminAuth.deleteUser(staffUser.uid)
+          } catch (cleanupError) {
+            console.error("Failed to remove an unlinked staff auth account:", cleanupError)
+          }
+        }
+        throw error
+      }
+
+      return Response.json({
+        success: true,
         email,
-        ownerUid: authResult.user.ownerUid,
+        role,
+        status: "pending",
+        registered: Boolean(registeredUser),
+      })
+    }
+
+    if (action === "revoke") {
+      const invitationSnapshot = await invitationRef.get()
+      if (!invitationSnapshot.exists) return jsonFailure("Staff record was not found.", 404)
+      await invitationRef.set({
+        status: "revoked",
         active: false,
         updatedAt: new Date(),
         updatedBy: authResult.user.uid,
       }, { merge: true })
-      return Response.json({ success: true })
+      return Response.json({ success: true, status: "revoked" })
     }
 
-    await invitationRef.set({
-      email,
-      ownerUid: authResult.user.ownerUid,
-      role,
-      active: true,
-      createdAt: new Date(),
-      createdBy: authResult.user.uid,
-      updatedAt: new Date(),
-    })
+    const invitationSnapshot = await invitationRef.get()
+    if (!invitationSnapshot.exists) return jsonFailure("Staff record was not found.", 404)
+    const invitation = invitationSnapshot.data()
+    if (String(invitation.status || "").toLowerCase() === "revoked") {
+      return jsonFailure("Revoked staff access must be re-invited before approval.", 409)
+    }
+    if (!isPendingInvitation(invitation) && !isApprovedStaffInvitation(invitation)) {
+      return jsonFailure("Only pending staff can be approved.", 409)
+    }
+
+    const staffUser = invitation.uid
+      ? await adminAuth.getUser(String(invitation.uid))
+      : await getRegisteredUser(adminAuth, email)
+    if (!staffUser || staffUser.email?.toLowerCase() !== email) {
+      return jsonFailure("The staff account could not be resolved for this email.", 409)
+    }
 
     const mail = await resolveCentralEnvMail()
     if (!mail.ok) {
-      console.error("Staff invitation email unavailable:", mail.code, mail.message)
-      return jsonFailure("Invitation saved, but email is not configured.", 503)
+      console.error("Staff onboarding email unavailable:", mail.code, mail.message)
+      return jsonFailure("Staff access was not approved because email is not configured.", 503)
     }
-    const roleLabel = role === "front-desk" ? "Front desk" : role === "finance" ? "Finance" : "Admin"
-    const message = `You have been invited to the resort booking admin as ${roleLabel}. Open the resort website, choose Admin, and sign in with Google using this email address: ${email}.`
+
+    const actionCodeSettings = {
+      url: `${getPublicBaseUrl()}/staff`,
+      handleCodeInApp: false,
+    }
+    const [passwordSetupLink, verificationLink] = await Promise.all([
+      adminAuth.generatePasswordResetLink(email, actionCodeSettings),
+      adminAuth.generateEmailVerificationLink(email, actionCodeSettings),
+    ])
+    const roleLabel = getRoleLabel(String(invitation.role || ""))
+    const setupMessage = `Your resort staff account as ${roleLabel} has been approved. Set your password, then verify your email to sign in to the resort admin portal.`
     await mail.transporter.sendMail({
       from: `"${mail.brandName}" <${mail.user}>`,
       to: email,
       replyTo: mail.replyTo,
-      subject: `Staff access invitation: ${roleLabel}`,
-      text: message,
-      html: `<p>${escapeHtml(message)}</p>`,
+      subject: "Your resort staff account is approved",
+      text: `${setupMessage}\n\nSet your password: ${passwordSetupLink}\n\nVerify your email: ${verificationLink}`,
+      html: `<p>${escapeHtml(setupMessage)}</p><p><a href="${escapeHtml(passwordSetupLink)}">Set your password</a></p><p><a href="${escapeHtml(verificationLink)}">Verify your email</a></p><p>After completing both steps, sign in at <a href="${escapeHtml(`${getPublicBaseUrl()}/admin`)}">the admin portal</a>.</p>`,
     })
-    return Response.json({ success: true, email, role })
+
+    const notificationRef = db
+      .collection("resortOwners")
+      .doc(ownerUid)
+      .collection("staffNotifications")
+      .doc()
+    await db.runTransaction(async (transaction) => {
+      const latestSnapshot = await transaction.get(invitationRef)
+      if (!latestSnapshot.exists) {
+        const error = new Error("Staff record was not found.")
+        error.status = 404
+        throw error
+      }
+      const latestInvitation = latestSnapshot.data()
+      if (String(latestInvitation.status || "").toLowerCase() === "revoked") {
+        const error = new Error("Staff access was revoked before approval completed.")
+        error.status = 409
+        throw error
+      }
+      if (isPendingInvitation(latestInvitation)) {
+        transaction.set(invitationRef, {
+          status: "approved",
+          active: true,
+          approvedAt: new Date(),
+          approvedBy: authResult.user.uid,
+          updatedAt: new Date(),
+        }, { merge: true })
+        transaction.create(notificationRef, {
+          staffUid: staffUser.uid,
+          title: "Staff access approved",
+          message: `Your ${roleLabel} access has been approved. Check your email to set your password and verify your account.`,
+          read: false,
+          createdAt: new Date(),
+        })
+      } else if (!isApprovedStaffInvitation(latestInvitation)) {
+        const error = new Error("Only pending staff can be approved.")
+        error.status = 409
+        throw error
+      }
+    })
+
+    return Response.json({ success: true, email, status: "approved" })
   } catch (error) {
-    console.error("Failed to save or send staff invitation:", error)
-    return jsonFailure("Staff invitation could not be saved or sent.", 502)
+    if (Number.isInteger(error?.status)) return jsonFailure(error.message, error.status)
+    const indexError = getStaffInvitationIndexError(error)
+    if (indexError) {
+      console.error("Staff management requires a Firestore collection-group index:", error)
+      return jsonFailure(indexError, 503)
+    }
+    console.error("Failed to manage staff access:", error)
+    return jsonFailure("Staff access could not be updated.", 502)
   }
 }

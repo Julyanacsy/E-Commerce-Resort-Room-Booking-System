@@ -7,8 +7,10 @@ import {
   datesBetween,
   getBookingDateLockId,
   getPaymentActionError,
+  getStaffInvitationIndexError,
   hasActiveBookingConflict,
   hasBookingPermission,
+  isApprovedStaffInvitation,
   normalizeDate,
   overlaps,
 } from "../lib/booking-domain.mjs"
@@ -85,6 +87,30 @@ test("staff permissions remain scoped to assigned roles", () => {
   assert.equal(hasBookingPermission(finance, "payment"), true)
   assert.equal(hasBookingPermission(finance, "booking"), false)
   assert.equal(hasBookingPermission({ isOwner: true }, "staff"), true)
+})
+
+test("staff invitations require approval while preserving legacy active invitations", () => {
+  assert.equal(isApprovedStaffInvitation({ status: "pending", active: false }), false)
+  assert.equal(isApprovedStaffInvitation({ status: "revoked", active: false }), false)
+  assert.equal(isApprovedStaffInvitation({ status: "approved", active: true }), true)
+  assert.equal(isApprovedStaffInvitation({ status: "approved", active: false }), false)
+  assert.equal(isApprovedStaffInvitation({ active: true }), true)
+  assert.equal(isApprovedStaffInvitation({ active: false }), false)
+})
+
+test("staff collection-group index failures show the actionable Firebase setup", () => {
+  assert.equal(getStaffInvitationIndexError({ code: 7, message: "permission denied" }), null)
+  assert.match(
+    getStaffInvitationIndexError({ code: 9, message: "FAILED_PRECONDITION" }),
+    /staffInvitations\.email.*ascending order/,
+  )
+  assert.match(
+    getStaffInvitationIndexError({
+      code: "failed-precondition",
+      message: "Create it: https://console.firebase.google.com/index?create=1",
+    }),
+    /https:\/\/console\.firebase\.google\.com\/index\?create=1/,
+  )
 })
 
 test("booking status transitions reject invalid or terminal transitions", () => {

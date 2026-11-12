@@ -63,6 +63,17 @@ service cloud.firestore {
               && resource.data.get("active", false) == true));
         allow write: if false;
       }
+
+      match /staffNotifications/{notificationId} {
+        allow read: if request.auth != null
+          && resource.data.get("staffUid", "") == request.auth.uid;
+        allow update: if request.auth != null
+          && resource.data.get("staffUid", "") == request.auth.uid
+          && request.resource.data.get("staffUid", "") == request.auth.uid
+          && request.resource.data.get("read", false) == true
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["read", "readAt"]);
+        allow create, delete: if false;
+      }
     }
 
     // Resort listings are public. Owners may submit their own listings for review;

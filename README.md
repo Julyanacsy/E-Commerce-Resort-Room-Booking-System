@@ -58,6 +58,8 @@ NEXT_PUBLIC_FIREBASE_PROJECT_ID=your_project_id
 NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=your_storage_bucket
 NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=your_sender_id
 NEXT_PUBLIC_FIREBASE_APP_ID=your_app_id
+# Public app URL used for Firebase account action links
+NEXT_PUBLIC_APP_URL=https://your-domain.example
 # One Gmail for all automated mail (OTP, booking status, contact, feedback, super-admin approve/reject)
 EMAIL_USER=your_sender@gmail.com
 EMAIL_PASSWORD=your_16_char_app_password
@@ -81,9 +83,11 @@ pnpm dev
 
 5. Open [http://localhost:3000](http://localhost:3000) in your browser.
 
+Enable the Email/Password sign-in provider in Firebase Authentication. Staff approval emails use the configured Gmail SMTP credentials and Firebase action links; add the app's production domain to Firebase Authentication's authorized domains.
+
 ### Run with Docker Desktop
 
-Docker Desktop must be running. Put local credentials in the ignored `.env.local` file; never add that file to Git. `docker-compose.yml` passes public `NEXT_PUBLIC_*` settings to the build and server-only credentials to the container at runtime.
+Docker Desktop must be running. Put local credentials in the ignored `.env.local` file; never add that file to Git. `docker-compose.yml` passes public `NEXT_PUBLIC_*` settings to the build and server-only credentials to the container at runtime. Docker Compose creates the `dev-network` automatically, so no manual network setup is needed after cloning.
 
 ```powershell
 docker --version
@@ -137,7 +141,7 @@ The booking total is calculated and validated by the server from the selected ro
 - **Check-in / Check-out**: Record arrival and departure with timestamps
 - **Email Reminders**: Booking confirmations, check-in instructions, and post-stay follow-ups
 - **Cancellations / Refunds**: Record cancellation reasons and manually track refund amounts, dates, and statuses
-- **Staff Accounts**: Invite verified Google accounts with Admin, Front desk, or Finance permissions
+- **Staff Accounts**: Convert existing accounts or create new staff accounts with Admin, Front desk, or Finance permissions; approve pending accounts and revoke access
 
 ### Rooms
 Room documents are stored in the Firestore `rooms` collection. Each room uses these fields:
@@ -212,7 +216,11 @@ Payment proof submissions, GCash reviews, cash receipts, walk-in payments, and r
 ### Resort Operations and Staff
 The Booking Calendar displays active reservations and available room types by date. Approved bookings can be marked checked in and checked out; the server records the actor and timestamp. Cancelling a booking requires a reason and supports manual refund tracking. Refund records are operational notes only: this project has no payment processor and cannot transfer or return funds.
 
-Owners can invite staff by email from Admin → Staff Accounts. Invited staff must sign in with their own verified Google account. Admin staff can manage booking operations and payments; Front desk staff can manage bookings, calendar, check-in/out, and walk-ins; Finance staff can review payment history, receipts, and refunds. Valid guest IDs remain viewable only by the resort owner.
+Resort owners and internal admins sign in at `/admin`; staff sign in separately at `/staff`. Each portal checks the authenticated account's server-verified role and directs users to the correct sign-in page if they use the wrong portal. Owners add staff from Admin → Staff Accounts by checking an email. Existing registered accounts can be converted; for an unregistered person, the owner provides their name, email, and contact details and the system creates a Firebase Auth account. Every new assignment starts Pending. Owner approval sends password-setup and email-verification links and creates an in-app notification for the staff member. Staff can sign in with email/password or Google using their verified account. Enable Firebase's Email/Password provider and configure `NEXT_PUBLIC_APP_URL` and Gmail SMTP for these flows.
+
+Admin staff can manage booking operations and payments; Front desk staff can manage bookings, calendar, check-in/out, and walk-ins; Finance staff can review payment history, receipts, and refunds. Staff API access and dashboard navigation are scoped to the assigned resort. Valid guest IDs remain viewable only by the resort owner.
+
+Staff assignments are stored under `resortOwners/{ownerUid}/staffInvitations/{email}` with a `pending`, `approved`, or `revoked` status. Approval notifications are stored under `resortOwners/{ownerUid}/staffNotifications/{notificationId}`. Existing invitation documents remain valid through a legacy `active`-field fallback; no destructive migration is required. Staff lookup and sign-in use a Firestore collection-group index on `staffInvitations.email` (ascending). If Firebase returns an index-required error, open its generated Firebase Console link, create the index, and wait until it is enabled. Deploy the updated Firestore rules in `firestore-rules.txt` separately.
 
 Email confirmations are sent when a booking is approved. A daily Vercel Cron job sends check-in instructions one day before arrival and a follow-up after checkout. Configure `CRON_SECRET` alongside the existing email variables; set it in the deployment environment. SMS reminders are not enabled.
 
