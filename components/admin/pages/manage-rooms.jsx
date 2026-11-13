@@ -1,27 +1,53 @@
 "use client"
 
-import { Check, Eye, Trash2, X } from "lucide-react"
+import { useEffect, useState } from "react"
+import { AlertTriangle, Archive, ArchiveRestore, Check, Eye, Search, X } from "lucide-react"
 import { getGoogleDirectionsUrl } from "@/lib/maps-preview-url"
+import { isRoomArchived } from "@/lib/room-archive.mjs"
 
 export default function ManageRooms({
   rooms,
-  paginatedRooms,
   loading,
   error,
   theme,
   onAddRoom,
   onPreviewRoom,
-  pendingDeleteId,
-  deletingId,
-  onConfirmDelete,
-  onCancelDelete,
-  onRequestDelete,
+  busyRoomId,
+  onArchiveRoom,
+  onRestoreRoom,
   roomsPage,
-  totalRoomPages,
   onPageChange,
 }) {
   const isDark = theme === "dark"
-  const filteredRooms = Array.isArray(rooms) ? rooms : []
+  const [roomFilter, setRoomFilter] = useState("active")
+  const [availabilityFilter, setAvailabilityFilter] = useState("all")
+  const [roomSearch, setRoomSearch] = useState("")
+  const [pendingArchiveId, setPendingArchiveId] = useState(null)
+  const allRooms = Array.isArray(rooms) ? rooms : []
+  const archivedRoomCount = allRooms.filter(isRoomArchived).length
+  const filteredRooms = allRooms.filter((room) => {
+    const matchesArchive = roomFilter === "archived"
+      ? isRoomArchived(room)
+      : !isRoomArchived(room)
+    const availability = room.availability || "Available"
+    const matchesAvailability = availabilityFilter === "all"
+      || availability === availabilityFilter
+    const searchTerm = roomSearch.trim().toLowerCase()
+    const matchesSearch = !searchTerm
+      || [room.name, room.type, room.roomNumber]
+        .some((value) => String(value || "").toLowerCase().includes(searchTerm))
+    return matchesArchive && matchesAvailability && matchesSearch
+  })
+  const roomsPerPage = 6
+  const totalRoomPages = Math.max(1, Math.ceil(filteredRooms.length / roomsPerPage))
+  const paginatedRooms = filteredRooms.slice(
+    (roomsPage - 1) * roomsPerPage,
+    roomsPage * roomsPerPage,
+  )
+
+  useEffect(() => {
+    if (roomsPage > totalRoomPages) onPageChange(totalRoomPages)
+  }, [onPageChange, roomsPage, totalRoomPages])
 
   return (
     <div>
@@ -31,17 +57,93 @@ export default function ManageRooms({
             Manage Rooms
           </h1>
           <p className={`text-sm ${isDark ? "text-gray-400" : "text-gray-500"}`}>
-            Add new rooms or update existing inventory.
+            {roomFilter === "archived"
+              ? "Archived rooms are hidden from guests. Restore one to make it bookable again."
+              : "Add new rooms or update existing inventory."}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onAddRoom}
-          className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-200 bg-emerald-700 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-700/30 transition hover:-translate-y-0.5 hover:bg-emerald-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
-        >
-          <span className="text-lg leading-none">+</span>
-          Add Room
-        </button>
+        <div className="flex shrink-0 items-center gap-4">
+          <button
+            type="button"
+            onClick={() => {
+              setRoomFilter(roomFilter === "archived" ? "active" : "archived")
+              onPageChange(1)
+              setPendingArchiveId(null)
+            }}
+            className={`text-sm font-medium underline-offset-4 transition hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
+              isDark ? "text-gray-400 hover:text-emerald-300" : "text-gray-500 hover:text-emerald-700"
+            }`}
+            aria-label={
+              roomFilter === "archived"
+                ? "Return to active rooms"
+                : `View ${archivedRoomCount} archived rooms`
+            }
+          >
+            <span className="inline-flex items-center gap-1.5">
+              <Archive size={14} aria-hidden="true" />
+              {roomFilter === "archived"
+                ? "Back to active rooms"
+                : `Archived${archivedRoomCount ? ` (${archivedRoomCount})` : ""}`}
+            </span>
+          </button>
+          {roomFilter === "active" && (
+            <button
+              type="button"
+              onClick={onAddRoom}
+              className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-200 bg-emerald-700 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-700/30 transition hover:-translate-y-0.5 hover:bg-emerald-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+            >
+              <span className="text-lg leading-none">+</span>
+              Add Room
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        <label className="relative block w-44 max-w-full">
+          <span className="sr-only">Search rooms by name, type, or room number</span>
+          <Search
+            size={15}
+            aria-hidden="true"
+            className={`pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 ${
+              isDark ? "text-gray-400" : "text-gray-500"
+            }`}
+          />
+          <input
+            type="search"
+            value={roomSearch}
+            onChange={(event) => {
+              setRoomSearch(event.target.value)
+              onPageChange(1)
+            }}
+            placeholder="Search rooms"
+            className={`h-9 w-full rounded-lg border py-1.5 pl-8 pr-2 text-sm ${
+              isDark
+                ? "border-slate-600 bg-slate-800 text-white placeholder:text-gray-500"
+                : "border-gray-300 bg-white text-gray-800 placeholder:text-gray-400"
+            }`}
+          />
+        </label>
+        <label>
+          <span className="sr-only">Filter rooms by availability</span>
+          <select
+            value={availabilityFilter}
+            onChange={(event) => {
+              setAvailabilityFilter(event.target.value)
+              onPageChange(1)
+            }}
+            className={`h-9 rounded-lg border px-2.5 text-sm ${
+              isDark
+                ? "border-slate-600 bg-slate-800 text-white"
+                : "border-gray-300 bg-white text-gray-800"
+            }`}
+          >
+            <option value="all">All availability</option>
+            <option value="Available">Available</option>
+            <option value="Maintenance">Maintenance</option>
+            <option value="Unavailable">Unavailable</option>
+          </select>
+        </label>
       </div>
 
       {loading ? (
@@ -142,45 +244,71 @@ export default function ManageRooms({
                     >
                       {room.availability || "Unavailable"}
                     </span>
-                    {pendingDeleteId === room.id ? (
-                      <div className="flex items-center gap-1">
+                    {isRoomArchived(room) ? (
+                      <button
+                        type="button"
+                        onClick={() => onRestoreRoom(room.id)}
+                        disabled={busyRoomId === room.id}
+                        className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-emerald-200 px-3 text-xs font-semibold text-emerald-700 transition hover:border-emerald-400 disabled:opacity-60 dark:border-emerald-800 dark:text-emerald-300"
+                        aria-label={`Restore ${room.name}`}
+                      >
+                        {busyRoomId === room.id
+                          ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-200 border-t-emerald-600" />
+                          : <ArchiveRestore size={16} />}
+                        Restore
+                      </button>
+                    ) : pendingArchiveId === room.id ? (
+                      <div
+                        role="alert"
+                        className={`flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 ${
+                          isDark
+                            ? "border-amber-800 bg-amber-950/50 text-amber-200"
+                            : "border-amber-300 bg-amber-50 text-amber-900"
+                        }`}
+                      >
+                        <AlertTriangle size={17} aria-hidden="true" />
+                        <span className="text-xs font-medium">
+                          Archive {room.name}? It will be hidden from new bookings.
+                        </span>
                         <button
                           type="button"
-                          onClick={() => onConfirmDelete(room.id)}
-                          disabled={deletingId === room.id}
-                          className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-red-200 text-red-600 transition hover:border-red-400 disabled:opacity-60"
-                          title="Confirm delete"
-                          aria-label={`Confirm deleting ${room.name}`}
+                          onClick={() => onArchiveRoom(room.id)}
+                          disabled={busyRoomId === room.id}
+                          className="inline-flex h-8 items-center justify-center gap-1 rounded-full bg-amber-700 px-3 text-xs font-semibold text-white transition hover:bg-amber-800 disabled:opacity-60"
                         >
-                          {deletingId === room.id ? (
-                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-red-200 border-t-red-600" />
+                          {busyRoomId === room.id ? (
+                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-amber-200 border-t-amber-600" />
                           ) : (
-                            <Check size={16} />
+                            <Check size={14} />
                           )}
+                          Archive
                         </button>
                         <button
                           type="button"
-                          onClick={onCancelDelete}
-                          className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 text-gray-600 transition hover:border-gray-400"
-                          title="Cancel"
-                          aria-label={`Cancel deleting ${room.name}`}
+                          onClick={() => setPendingArchiveId(null)}
+                          className="inline-flex h-8 items-center justify-center rounded-full border border-current px-3 text-xs font-semibold transition hover:bg-amber-100 dark:hover:bg-amber-900"
                         >
-                          <X size={16} />
+                          Cancel
                         </button>
                       </div>
                     ) : (
                       <button
                         type="button"
-                        onClick={() => onRequestDelete(room.id)}
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-red-200 text-red-600 transition hover:border-red-400"
-                        title="Delete room"
-                        aria-label={`Delete ${room.name}`}
+                        onClick={() => setPendingArchiveId(room.id)}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-amber-200 text-amber-700 transition hover:border-amber-400"
+                        title="Archive room"
+                        aria-label={`Archive ${room.name}`}
                       >
-                        <Trash2 size={16} />
+                        <Archive size={16} />
                       </button>
                     )}
                   </div>
                 </div>
+                {isRoomArchived(room) && (
+                  <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
+                    Archived
+                  </p>
+                )}
 
                 <p className={`mt-2 text-sm ${isDark ? "text-gray-400" : "text-gray-500"}`}>
                   ₱{(room.price ?? 0).toLocaleString()} / night • {room.maxGuests ?? 1} guests
@@ -283,7 +411,9 @@ export default function ManageRooms({
               : "border-emerald-200 bg-white text-gray-500"
           }`}
         >
-          No rooms added yet. Click &quot;Add Room&quot; to create one.
+          {roomFilter === "archived"
+            ? "No archived rooms."
+            : "No active rooms. Archived rooms can be found using the Archived link above."}
         </div>
       )}
     </div>
