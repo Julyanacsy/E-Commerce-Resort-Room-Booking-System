@@ -7,6 +7,7 @@ import {
   hasBookingPermission,
   jsonFailure,
 } from "@/lib/booking-api-server"
+import { writeResortAdminAudit } from "@/lib/resort-admin-events.mjs"
 
 export async function POST(request) {
   const authResult = await authenticateBookingAdmin(request)
@@ -51,6 +52,18 @@ export async function POST(request) {
           updatedAt: new Date(),
         })
         lockRefs.forEach((ref) => transaction.delete(ref))
+        writeResortAdminAudit(transaction, db, {
+          ownerUid: String(current.get("ownerUid") || user.ownerUid || user.uid),
+          actorUid: user.uid,
+          actorEmail: user.email,
+          actorRole: user.staffRole,
+          action: "booking.auto-completed",
+          entityType: "booking",
+          entityId: item.id,
+          summary: "Booking was automatically marked completed after checkout.",
+          before: { bookingStatus: "Approved" },
+          after: { bookingStatus: "Completed" },
+        })
         return true
       })
       if (didComplete) completed.push(item.id)

@@ -6,6 +6,7 @@ import {
   jsonFailure,
   normalizeDate,
 } from "@/lib/booking-api-server"
+import { writeResortAdminEvent } from "@/lib/resort-admin-events.mjs"
 
 const REFUND_STATUSES = new Set(["not_refunded", "pending", "refunded"])
 
@@ -93,6 +94,26 @@ export async function POST(request) {
           createdAt: now,
         })
       }
+      writeResortAdminEvent(transaction, db, {
+        ownerUid: String(current.get("ownerUid") || authResult.user.ownerUid || authResult.user.uid),
+        actorUid: authResult.user.uid,
+        actorEmail: authResult.user.email,
+        actorRole: authResult.user.staffRole,
+        action: "refund.updated",
+        entityType: "booking",
+        entityId: bookingId,
+        summary: "A booking refund record was updated.",
+        before: {
+          refundAmount: Number(current.get("refundAmount") || 0),
+          refundStatus: String(current.get("refundStatus") || ""),
+          refundDate: String(current.get("refundDate") || ""),
+        },
+        after: {
+          refundAmount: amount,
+          refundStatus: amount > 0 ? status : "not_applicable",
+          refundDate: date || "",
+        },
+      })
     })
     return Response.json({ success: true, refundAmount: amount, refundStatus: amount ? status : "not_applicable" })
   } catch (error) {

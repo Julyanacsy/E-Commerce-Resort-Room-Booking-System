@@ -6,6 +6,8 @@ import { Download, FileSpreadsheet, Receipt, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 import { auth, db } from "@/lib/firebase"
 import { bookingAdminRequest } from "@/lib/booking-admin-client"
+import { isRoomArchived } from "@/lib/room-archive.mjs"
+import SearchField from "@/components/admin/search-field"
 
 const PAYMENT_FILTERS = [
   { value: "all", label: "All" },
@@ -77,6 +79,8 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
   const [historyEndDate, setHistoryEndDate] = useState("")
   const [historyMethod, setHistoryMethod] = useState("all")
   const [historyStatus, setHistoryStatus] = useState("all")
+  const [paymentSearch, setPaymentSearch] = useState("")
+  const [historySearch, setHistorySearch] = useState("")
   const [summaryMonth, setSummaryMonth] = useState(getCurrentManilaMonth)
   const [imagePreview, setImagePreview] = useState(null)
   const [walkInSaving, setWalkInSaving] = useState(false)
@@ -137,6 +141,7 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
         if (!active) return
         const availableRooms = snapshot.docs
           .map((item) => ({ id: item.id, ...item.data() }))
+          .filter((room) => !isRoomArchived(room))
           .filter((room) => !room.availability || room.availability === "Available")
           .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")))
         setRooms(availableRooms)
@@ -154,7 +159,7 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
     }
   }, [ownerUid, isLegacyHelpdesk])
 
-  const visibleBookings = useMemo(
+  const statusFilteredBookings = useMemo(
     () =>
       bookings.filter((booking) => {
         const paymentStatus = booking.paymentStatus || "unpaid"
@@ -162,6 +167,14 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
       }),
     [bookings, filter],
   )
+  const visibleBookings = useMemo(() => {
+    const term = paymentSearch.trim().toLowerCase()
+    if (!term) return statusFilteredBookings
+    return statusFilteredBookings.filter((booking) =>
+      [booking.name, booking.email, booking.phone, booking.roomType, booking.id, booking.status, booking.paymentStatus]
+        .some((value) => String(value || "").toLowerCase().includes(term)),
+    )
+  }, [paymentSearch, statusFilteredBookings])
 
   const historyRecords = useMemo(() => {
     const records = [...paymentEvents]
@@ -196,15 +209,25 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
     () =>
       historyRecords.filter((record) => {
         const date = getManilaDateKey(record.createdAt)
+        const term = historySearch.trim().toLowerCase()
         return (
           date &&
           (!historyStartDate || date >= historyStartDate) &&
           (!historyEndDate || date <= historyEndDate) &&
           (historyMethod === "all" || record.paymentMethod === historyMethod) &&
-          (historyStatus === "all" || record.paymentStatus === historyStatus)
+          (historyStatus === "all" || record.paymentStatus === historyStatus) &&
+          (!term || [
+            record.guestName,
+            record.roomType,
+            record.bookingId,
+            record.action,
+            record.paymentMethod,
+            record.paymentStatus,
+            record.recordedBy,
+          ].some((value) => String(value || "").toLowerCase().includes(term)))
         )
       }),
-    [historyEndDate, historyMethod, historyRecords, historyStartDate, historyStatus],
+    [historyEndDate, historyMethod, historyRecords, historySearch, historyStartDate, historyStatus],
   )
 
   const monthlyPaymentSummary = useMemo(() => {
@@ -748,6 +771,8 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
         ))}
       </div>
 
+      <SearchField value={paymentSearch} onChange={setPaymentSearch} placeholder="Search guest, room, or reference" />
+
       {loading ? (
         <p className="rounded-lg border border-border bg-card p-5 text-sm text-muted-foreground" role="status">
           Loading payment records…
@@ -957,6 +982,7 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
               </section>
 
               <div className="flex flex-wrap items-end gap-3 rounded-2xl border border-[#eee2d5] bg-white p-4">
+                <SearchField value={historySearch} onChange={setHistorySearch} placeholder="Search guest, room, or transaction" />
                 <label className="text-sm font-semibold text-[#18271e]">
                   From
                   <input
@@ -1005,8 +1031,9 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
                     setHistoryEndDate("")
                     setHistoryMethod("all")
                     setHistoryStatus("all")
+                    setHistorySearch("")
                   }}
-                  disabled={!historyStartDate && !historyEndDate && historyMethod === "all" && historyStatus === "all"}
+                  disabled={!historyStartDate && !historyEndDate && historyMethod === "all" && historyStatus === "all" && !historySearch}
                   className="rounded-xl border border-[#d9e3dc] px-4 py-2.5 text-sm font-semibold text-[#14583f] hover:bg-[#f1f7f2] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Clear filters
