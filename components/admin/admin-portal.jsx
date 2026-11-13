@@ -94,11 +94,13 @@ import ReminderSettings from "@/components/admin/reminder-settings"
 import AdminNotificationBell from "@/components/admin/admin-notification-bell"
 import AuditLog from "@/components/admin/pages/audit-log"
 import LostAndFound from "@/components/admin/pages/lost-and-found"
+import RoomItemMonitoring from "@/components/admin/pages/room-item-monitoring"
 const ALLOWED_ADMINS = ["admin@luxestay.com", "resort.helpdesk01@gmail.com"]
 
 const NAV_ITEMS = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "manage-rooms", label: "Manage Rooms", icon: BedDouble },
+  { key: "room-item-monitoring", label: "Room Item Monitoring", icon: ClipboardList },
   { key: "lost-and-found", label: "Lost and Found", icon: Search },
   { key: "manage-bookings", label: "Manage Bookings", icon: CalendarCheck },
   { key: "booking-calendar", label: "Booking Calendar", icon: CalendarDays },
@@ -185,12 +187,12 @@ export default function AdminPage({ portalMode }) {
     : null
   const staffRole = adminUser?.staffRole || "owner"
   const staffNavKeys = {
-    admin: ["manage-bookings", "booking-calendar", "booking-history", "payment-integration", "lost-and-found"],
-    "front-desk": ["manage-bookings", "booking-calendar", "payment-integration", "lost-and-found"],
+    admin: ["manage-bookings", "room-item-monitoring", "booking-calendar", "booking-history", "payment-integration", "lost-and-found"],
+    "front-desk": ["manage-bookings", "room-item-monitoring", "booking-calendar", "payment-integration", "lost-and-found"],
     finance: ["booking-history", "payment-integration"],
   }
   const visibleNavItems = isLegacyHelpdesk
-    ? NAV_ITEMS.filter((item) => !["lost-and-found", "audit-log"].includes(item.key))
+    ? NAV_ITEMS.filter((item) => !["lost-and-found", "audit-log", "room-item-monitoring"].includes(item.key))
     : staffRole === "owner"
       ? NAV_ITEMS
       : NAV_ITEMS.filter((item) => staffNavKeys[staffRole]?.includes(item.key))
@@ -1472,6 +1474,13 @@ export default function AdminPage({ portalMode }) {
               onPageChange={setRoomsPage}
             />
           )}
+
+          {currentPage === "room-item-monitoring"
+            && !isLegacyHelpdesk
+            && ["owner", "admin", "front-desk"].includes(staffRole)
+            && (
+              <RoomItemMonitoring canManageItems={staffRole === "owner" || staffRole === "admin"} />
+            )}
 
           {currentPage === "manage-bookings" && (
             <ManageBookings

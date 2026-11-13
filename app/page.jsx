@@ -21,6 +21,7 @@ import {
 } from "lucide-react"
 import { BRANDING_DEFAULTS, useBranding } from "@/hooks/use-branding"
 import { normalizeOwnerUidFromSearchParam } from "@/lib/booking-tenant"
+import { isRoomArchived } from "@/lib/room-archive.mjs"
 import { calculateReservationDeposit, DEFAULT_RESERVATION_DEPOSIT_PERCENT } from "@/lib/payment-domain.mjs"
 import { useMarketplaceSettings } from "@/hooks/use-marketplace-settings"
 import { useResortOwnerBranding } from "@/hooks/use-resort-owner-branding"
@@ -553,6 +554,7 @@ export default function Home() {
           )
         }
         roomsData = roomsData
+          .filter((room) => !isRoomArchived(room))
           .filter((room) => {
             if (!room.availability) {
               return true
