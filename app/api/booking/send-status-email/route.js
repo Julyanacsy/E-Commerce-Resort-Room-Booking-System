@@ -7,6 +7,7 @@ import {
   jsonFailure,
 } from "@/lib/booking-api-server"
 import { renderBookingEmailLayout } from "@/lib/booking-email-layout"
+import { writeResortAdminAudit } from "@/lib/resort-admin-events.mjs"
 
 export async function POST(request) {
   const authResult = await authenticateBookingAdmin(request)
@@ -76,13 +77,30 @@ export async function POST(request) {
       }),
     })
     if (type === "booking" && status === "Approved") {
-      await db.collection("guestbooking").doc(bookingId).update({
-        confirmationEmailSentAt: new Date(),
-        confirmationEmailSentBy: authResult.user.uid,
-        "reminderEmails.confirmation": {
-          status: "sent",
-          sentAt: new Date(),
-        },
+      const bookingRef = db.collection("guestbooking").doc(bookingId)
+      await db.runTransaction(async (transaction) => {
+        const current = await transaction.get(bookingRef)
+        if (!current.exists || !canManageBooking(authResult.user, current.data())) {
+          throw new Error("BOOKING_ACCESS_CHANGED")
+        }
+        transaction.update(bookingRef, {
+          confirmationEmailSentAt: new Date(),
+          confirmationEmailSentBy: authResult.user.uid,
+          "reminderEmails.confirmation": {
+            status: "sent",
+            sentAt: new Date(),
+          },
+        })
+        writeResortAdminAudit(transaction, db, {
+          ownerUid: String(current.get("ownerUid") || authResult.user.ownerUid || authResult.user.uid),
+          actorUid: authResult.user.uid,
+          actorEmail: authResult.user.email,
+          actorRole: authResult.user.staffRole,
+          action: "booking.confirmation-email-sent",
+          entityType: "booking",
+          entityId: bookingId,
+          summary: "Booking confirmation email was sent successfully.",
+        })
       })
     }
     return Response.json({ success: true })
