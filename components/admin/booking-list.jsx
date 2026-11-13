@@ -1,8 +1,9 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 import { bookingAdminRequest } from "@/lib/booking-admin-client"
+import SearchField from "@/components/admin/search-field"
 
 function formatDate(value) {
   if (!value) return "—"
@@ -33,6 +34,7 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
   const [error, setError] = useState("")
   const [busyBookingId, setBusyBookingId] = useState("")
   const [imagePreview, setImagePreview] = useState(null)
+  const [search, setSearch] = useState("")
 
   const loadBookings = useCallback(async () => {
     setLoading(true)
@@ -52,6 +54,25 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
   useEffect(() => {
     loadBookings()
   }, [loadBookings, ownerUid, isLegacyHelpdesk])
+
+  const filteredBookings = useMemo(() => {
+    const term = search.trim().toLowerCase()
+    if (!term) return bookings
+    return bookings.filter((booking) =>
+      [
+        booking.name,
+        booking.email,
+        booking.phone,
+        booking.roomType,
+        booking.id,
+        booking.status,
+        booking.paymentStatus,
+        booking.stayStatus,
+        booking.checkIn,
+        booking.checkOut,
+      ].some((value) => String(value || "").toLowerCase().includes(term)),
+    )
+  }, [bookings, search])
 
   const updateStatus = async (booking, status) => {
     const cancellation = {}
@@ -242,6 +263,14 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
         </button>
       </header>
 
+      <SearchField
+        value={search}
+        onChange={setSearch}
+        placeholder={history
+          ? "Search guest, room, status, or reference"
+          : "Search guest, room, email, or reference"}
+      />
+
       {loading ? (
         <p className="rounded-lg border border-border bg-card p-5 text-sm text-muted-foreground" role="status">Loading bookings…</p>
       ) : error ? (
@@ -250,9 +279,13 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
         <p className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">
           {history ? "No booking history yet." : "No active booking requests."}
         </p>
+      ) : filteredBookings.length === 0 ? (
+        <p className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">
+          No bookings match “{search}”.
+        </p>
       ) : (
         <div className="space-y-4">
-          {bookings.map((booking) => (
+          {filteredBookings.map((booking) => (
             <article key={booking.id} className="rounded-xl border border-border bg-card p-5 shadow-sm">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
