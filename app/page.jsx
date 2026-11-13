@@ -25,6 +25,7 @@ import { useMarketplaceSettings } from "@/hooks/use-marketplace-settings"
 import { useResortOwnerBranding } from "@/hooks/use-resort-owner-branding"
 import DynamicHead from "@/components/dynamic-head"
 import { db } from "@/lib/firebase"
+import LostAndFoundPublic from "@/components/lost-and-found-public"
 import { collection, doc, query, orderBy, onSnapshot, where } from "firebase/firestore"
 import { syncManager } from "@/lib/offline-storage"
 import PWAInstallButton from "@/components/pwa-install-button"
@@ -358,7 +359,9 @@ export default function Home() {
     }
   }, [resortMarketplace.mapsUrl, bookingOwnerUid])
 
-  const navLinks = ["Home", "Rooms", "Booking", "About", "Contact"]
+  const navLinks = bookingOwnerUid
+    ? ["Home", "Rooms", "Lost and Found", "Booking", "About", "Contact"]
+    : ["Home", "Rooms", "Booking", "About", "Contact"]
   /** Marketplace listing has something to show above contact (map link and/or area label) */
   const hasResortListingHint =
     Boolean(bookingOwnerUid) &&
@@ -1413,6 +1416,16 @@ export default function Home() {
           )}
         </div>
       </section>
+
+      {bookingOwnerUid ? (
+        <LostAndFoundPublic
+          ownerUid={bookingOwnerUid}
+          theme={theme}
+          resortName={branding.name}
+          contactEmail={branding.email}
+          contactPhone={branding.phone}
+        />
+      ) : null}
 
       {/* Room Detail Modal */}
       {activeRoom && (

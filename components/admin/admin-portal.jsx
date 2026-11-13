@@ -28,6 +28,7 @@ import {
   BellRing,
   CalendarCheck,
   CalendarDays,
+  ClipboardList,
   History,
   ChevronsLeft,
   ChevronsRight,
@@ -41,6 +42,7 @@ import {
   Moon,
   Paintbrush,
   Star,
+  Search,
   Sun,
   Upload,
   Wallet,
@@ -88,11 +90,15 @@ import PaymentSettings from "@/components/admin/payment-settings"
 import BookingCalendar from "@/components/admin/booking-calendar"
 import StaffManagement from "@/components/admin/staff-management"
 import ReminderSettings from "@/components/admin/reminder-settings"
+import AdminNotificationBell from "@/components/admin/admin-notification-bell"
+import AuditLog from "@/components/admin/pages/audit-log"
+import LostAndFound from "@/components/admin/pages/lost-and-found"
 const ALLOWED_ADMINS = ["admin@luxestay.com", "resort.helpdesk01@gmail.com"]
 
 const NAV_ITEMS = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "manage-rooms", label: "Manage Rooms", icon: BedDouble },
+  { key: "lost-and-found", label: "Lost and Found", icon: Search },
   { key: "manage-bookings", label: "Manage Bookings", icon: CalendarCheck },
   { key: "booking-calendar", label: "Booking Calendar", icon: CalendarDays },
   { key: "booking-history", label: "Booking History", icon: History },
@@ -101,6 +107,7 @@ const NAV_ITEMS = [
   { key: "brand-settings", label: "Brand Settings", icon: Paintbrush },
   { key: "payment-integration", label: "Payments", icon: Wallet },
   { key: "reminder-settings", label: "Email Reminders", icon: BellRing },
+  { key: "audit-log", label: "Audit Log", icon: ClipboardList },
   { key: "staff-management", label: "Staff Accounts", icon: Users },
 ]
 
@@ -179,12 +186,13 @@ export default function AdminPage({ portalMode }) {
     : null
   const staffRole = adminUser?.staffRole || "owner"
   const staffNavKeys = {
-    admin: ["manage-bookings", "booking-calendar", "booking-history", "payment-integration"],
-    "front-desk": ["manage-bookings", "booking-calendar", "payment-integration"],
+    admin: ["manage-bookings", "booking-calendar", "booking-history", "payment-integration", "lost-and-found"],
+    "front-desk": ["manage-bookings", "booking-calendar", "payment-integration", "lost-and-found"],
     finance: ["booking-history", "payment-integration"],
   }
-  const visibleNavItems =
-    isLegacyHelpdesk || staffRole === "owner"
+  const visibleNavItems = isLegacyHelpdesk
+    ? NAV_ITEMS.filter((item) => !["lost-and-found", "audit-log"].includes(item.key))
+    : staffRole === "owner"
       ? NAV_ITEMS
       : NAV_ITEMS.filter((item) => staffNavKeys[staffRole]?.includes(item.key))
   const { branding: ownerBrandingSnapshot, updateBranding: updateOwnerBranding } =
@@ -1414,6 +1422,12 @@ export default function AdminPage({ portalMode }) {
                 ))}
               </section>
             ) : null}
+            {staffRole === "owner" && !isLegacyHelpdesk ? (
+              <AdminNotificationBell
+                onOpenAuditLog={() => setCurrentPage("audit-log")}
+                onOpenLostAndFound={() => setCurrentPage("lost-and-found")}
+              />
+            ) : null}
             <div className="mb-6 flex items-center justify-between gap-3 lg:hidden">
               <button
                 onClick={() => setMobileSidebarVisible((prev) => !prev)}
@@ -1492,6 +1506,11 @@ export default function AdminPage({ portalMode }) {
           )}
 
           {currentPage === "booking-calendar" && <BookingCalendar />}
+          {currentPage === "lost-and-found"
+            && !isLegacyHelpdesk
+            && ["owner", "admin", "front-desk"].includes(staffRole)
+            && <LostAndFound />}
+          {currentPage === "audit-log" && staffRole === "owner" && !isLegacyHelpdesk && <AuditLog />}
           {currentPage === "reminder-settings" && staffRole === "owner" && (
             <ReminderSettings ownerUid={tenantOwnerUid} />
           )}
