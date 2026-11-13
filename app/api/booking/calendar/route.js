@@ -5,6 +5,7 @@ import {
   jsonFailure,
   normalizeDate,
 } from "@/lib/booking-api-server"
+import { isRoomArchived } from "@/lib/room-archive.mjs"
 
 export async function GET(request) {
   const authResult = await authenticateBookingAdmin(request)
@@ -51,6 +52,7 @@ export async function GET(request) {
       )
       .sort((a, b) => a.checkIn.localeCompare(b.checkIn))
     const rooms = roomsSnapshot.docs
+      .filter((item) => !isRoomArchived(item.data()))
       .map((item) => String(item.get("name") || "").trim())
       .filter(Boolean)
       .sort((a, b) => a.localeCompare(b))
