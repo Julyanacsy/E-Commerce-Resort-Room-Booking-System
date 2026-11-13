@@ -12,6 +12,10 @@ import {
   normalizeDate,
   overlaps,
 } from "@/lib/booking-api-server"
+import {
+  writeResortAdminAudit,
+  writeResortAdminNotification,
+} from "@/lib/resort-admin-events.mjs"
 
 export async function POST(request) {
   const authResult = await authenticateBookingAdmin(request)
@@ -158,6 +162,37 @@ export async function POST(request) {
           bookingId: bookingRef.id,
           createdAt: now,
         })
+      })
+      const event = {
+        ownerUid: user.ownerUid,
+        actorUid: user.uid,
+        actorEmail: user.email,
+        actorRole: user.staffRole,
+        entityType: "booking",
+        entityId: bookingRef.id,
+      }
+      writeResortAdminAudit(transaction, db, {
+        ...event,
+        action: "booking.walk-in-created",
+        summary: "A paid cash walk-in booking was created.",
+        after: {
+          bookingStatus: "Approved",
+          paymentStatus: "paid",
+          paymentMethod: "cash",
+          paymentAmount: totalPrice,
+        },
+      })
+      writeResortAdminNotification(transaction, db, {
+        ...event,
+        type: "booking.new",
+        title: "New walk-in booking",
+        message: `A paid walk-in booking was created for ${roomType}.`,
+      })
+      writeResortAdminNotification(transaction, db, {
+        ...event,
+        type: "payment.received",
+        title: "Payment received",
+        message: `Cash payment was recorded for a walk-in booking.`,
       })
     })
 

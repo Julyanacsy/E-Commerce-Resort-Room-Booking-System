@@ -5,6 +5,7 @@ import {
   hasBookingPermission,
   jsonFailure,
 } from "@/lib/booking-api-server"
+import { writeResortAdminAudit } from "@/lib/resort-admin-events.mjs"
 
 export async function POST(request) {
   const authResult = await authenticateBookingAdmin(request)
@@ -52,6 +53,18 @@ export async function POST(request) {
           ? { checkedInAt: now, checkedInBy: authResult.user.uid }
           : { checkedOutAt: now, checkedOutBy: authResult.user.uid }),
         updatedAt: now,
+      })
+      writeResortAdminAudit(transaction, db, {
+        ownerUid: String(current.get("ownerUid") || authResult.user.ownerUid || authResult.user.uid),
+        actorUid: authResult.user.uid,
+        actorEmail: authResult.user.email,
+        actorRole: authResult.user.staffRole,
+        action: `booking.${action}`,
+        entityType: "booking",
+        entityId: bookingId,
+        summary: `Booking stay status changed to ${action === "check-in" ? "checked in" : "checked out"}.`,
+        before: { stayStatus },
+        after: { stayStatus: action === "check-in" ? "checked_in" : "checked_out" },
       })
     })
     return Response.json({

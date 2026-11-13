@@ -1,6 +1,7 @@
 import { resolveCentralEnvMail } from "@/lib/central-env-mail"
 import { renderBookingEmailLayout } from "@/lib/booking-email-layout"
 import { getBookingDb, getManilaDate, jsonFailure } from "@/lib/booking-api-server"
+import { writeResortAdminAudit } from "@/lib/resort-admin-events.mjs"
 
 function addDays(date, amount) {
   const parsed = new Date(`${date}T00:00:00.000Z`)
@@ -98,14 +99,30 @@ export async function GET(request) {
               brandName: mail.brandName,
             }),
           })
-          await item.ref.update({
-            ...(reminder.kind === "confirmation"
-              ? { confirmationEmailSentAt: new Date() }
-              : {}),
-            [`reminderEmails.${reminder.kind}`]: {
-              status: "sent",
-              sentAt: new Date(),
-            },
+          await db.runTransaction(async (transaction) => {
+            const current = await transaction.get(item.ref)
+            if (!current.exists) throw new Error("BOOKING_NOT_FOUND")
+            transaction.update(item.ref, {
+              ...(reminder.kind === "confirmation"
+                ? { confirmationEmailSentAt: new Date() }
+                : {}),
+              [`reminderEmails.${reminder.kind}`]: {
+                status: "sent",
+                sentAt: new Date(),
+              },
+            })
+            if (current.get("ownerUid")) {
+              writeResortAdminAudit(transaction, db, {
+                ownerUid: String(current.get("ownerUid")),
+                actorUid: "system:scheduled-reminders",
+                actorEmail: "",
+                actorRole: "system",
+                action: `booking.${reminder.kind}-email-sent`,
+                entityType: "booking",
+                entityId: item.id,
+                summary: `Scheduled ${reminder.kind} email was sent successfully.`,
+              })
+            }
           })
           sent.push({ bookingId: item.id, kind: reminder.kind })
         } catch (error) {

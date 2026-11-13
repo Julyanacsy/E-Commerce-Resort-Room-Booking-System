@@ -6,6 +6,7 @@ import {
   getBookingDb,
   jsonFailure,
 } from "@/lib/booking-api-server"
+import { writeResortAdminEvent } from "@/lib/resort-admin-events.mjs"
 
 const PAYMENT_STATUS_BY_ACTION = {
   "mark-as-paid": "paid",
@@ -100,6 +101,33 @@ export async function POST(request) {
         recordedBy: authResult.user.uid,
         recordedByEmail: authResult.user.email,
         createdAt: new Date(),
+      })
+      writeResortAdminEvent(transaction, db, {
+        ownerUid: authResult.user.ownerUid,
+        actorUid: authResult.user.uid,
+        actorEmail: authResult.user.email,
+        actorRole: authResult.user.staffRole,
+        action: nextPaymentStatus === "paid" ? "payment.received" : "payment.rejected",
+        entityType: "booking",
+        entityId: bookingId,
+        summary: nextPaymentStatus === "paid"
+          ? "A booking payment was recorded as received."
+          : "A booking payment submission was rejected.",
+        before: { paymentStatus: status },
+        after: {
+          paymentStatus: nextPaymentStatus,
+          paymentMethod: action === "record-cash" ? "cash" : "gcash",
+          paymentAmount: Number(current.get("totalPrice") || 0),
+        },
+        ...(nextPaymentStatus === "paid"
+          ? {
+              notification: {
+                type: "payment.received",
+                title: "Payment received",
+                message: `A ${action === "record-cash" ? "cash" : "GCash"} payment for booking ${bookingId} was recorded as received.`,
+              },
+            }
+          : {}),
       })
     })
 

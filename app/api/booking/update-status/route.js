@@ -8,6 +8,7 @@ import {
   jsonFailure,
   normalizeDate,
 } from "@/lib/booking-api-server"
+import { writeResortAdminEvent } from "@/lib/resort-admin-events.mjs"
 
 export async function POST(request) {
   const authResult = await authenticateBookingAdmin(request)
@@ -116,6 +117,41 @@ export async function POST(request) {
         })
       }
       if (lockRefs.length) lockRefs.forEach((ref) => transaction.delete(ref))
+      const ownerUid = String(current.get("ownerUid") || authResult.user.ownerUid || authResult.user.uid)
+      if (ownerUid) {
+        writeResortAdminEvent(transaction, db, {
+          ownerUid,
+          actorUid: authResult.user.uid,
+          actorEmail: authResult.user.email,
+          actorRole: authResult.user.staffRole,
+          action: status === "Cancelled" ? "booking.cancelled" : "booking.status-updated",
+          entityType: "booking",
+          entityId: bookingId,
+          summary: status === "Cancelled"
+            ? "A booking was cancelled."
+            : `Booking status changed to ${status}.`,
+          before: {
+            bookingStatus: current.get("status"),
+            refundAmount: Number(current.get("refundAmount") || 0),
+            refundStatus: String(current.get("refundStatus") || ""),
+          },
+          after: {
+            bookingStatus: status,
+            ...(status === "Cancelled"
+              ? { refundAmount, refundStatus: refundAmount > 0 ? refundStatus : "not_applicable", refundDate: refundDate || "" }
+              : {}),
+          },
+          ...(status === "Cancelled"
+            ? {
+                notification: {
+                  type: "booking.cancelled",
+                  title: "Booking cancelled",
+                  message: `Booking ${bookingId} for ${String(current.get("roomType") || "a room")} was cancelled.`,
+                },
+              }
+            : {}),
+        })
+      }
     })
 
     return Response.json({ success: true, bookingId, status })

@@ -18,6 +18,7 @@ import {
 } from "@/lib/booking-api-server"
 import { normalizeOwnerUid } from "@/lib/booking-tenant"
 import { verifyOtpInTransaction } from "@/lib/otp-store"
+import { writeResortAdminEvent } from "@/lib/resort-admin-events.mjs"
 
 const MAX_UPLOAD_CHARS = 350_000
 
@@ -187,6 +188,24 @@ export async function POST(request) {
           amount: totalPrice,
           recordedBy: "guest",
           createdAt: new Date(),
+        })
+      }
+      if (ownerUid) {
+        writeResortAdminEvent(transaction, db, {
+          ownerUid,
+          actorUid: "guest",
+          actorEmail: "",
+          actorRole: "guest",
+          action: "booking.created",
+          entityType: "booking",
+          entityId: bookingRef.id,
+          summary: "A new guest booking was submitted.",
+          after: { bookingStatus: "Pending", paymentStatus: bookingData.paymentStatus },
+          notification: {
+            type: "booking.new",
+            title: "New booking",
+            message: `A booking request for ${roomType} (${bookingRef.id}) is waiting for review.`,
+          },
         })
       }
       lockRefs.forEach((ref, index) => {
