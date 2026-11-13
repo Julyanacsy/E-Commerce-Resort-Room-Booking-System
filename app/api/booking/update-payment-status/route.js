@@ -6,13 +6,11 @@ import {
   getBookingDb,
   jsonFailure,
 } from "@/lib/booking-api-server"
+import {
+  calculateReservationDeposit,
+  getRecordedPaymentAmount,
+} from "@/lib/payment-domain.mjs"
 import { writeResortAdminEvent } from "@/lib/resort-admin-events.mjs"
-
-const PAYMENT_STATUS_BY_ACTION = {
-  "mark-as-paid": "paid",
-  reject: "rejected",
-  "record-cash": "paid",
-}
 
 export async function POST(request) {
   const authResult = await authenticateBookingAdmin(request)
@@ -30,8 +28,7 @@ export async function POST(request) {
 
   const bookingId = String(body?.bookingId || "").trim()
   const action = String(body?.action || "").trim()
-  const nextPaymentStatus = PAYMENT_STATUS_BY_ACTION[action]
-  if (!bookingId || !nextPaymentStatus) {
+  if (!bookingId || !["mark-as-paid", "reject", "record-cash"].includes(action)) {
     return jsonFailure("Booking and a valid payment action are required.", 400)
   }
   const permission = action === "record-cash" ? "booking" : "payment"
@@ -61,7 +58,7 @@ export async function POST(request) {
     )
     if (paymentActionError) return jsonFailure(paymentActionError, 409)
 
-    await db.runTransaction(async (transaction) => {
+    const paymentResult = await db.runTransaction(async (transaction) => {
       const current = await transaction.get(bookingRef)
       if (!current.exists) throw new Error("PAYMENT_REVIEW_CHANGED")
       const status = String(current.get("paymentStatus") || "unpaid")
@@ -78,14 +75,43 @@ export async function POST(request) {
       ) {
         throw new Error("PAYMENT_REVIEW_CHANGED")
       }
+      const total = Math.max(0, Number(current.get("totalPrice") || 0))
+      const alreadyPaid = getRecordedPaymentAmount({
+        paymentStatus: status,
+        paymentAmount: current.get("paymentAmount"),
+        totalPrice: total,
+      })
+      const depositTarget = Number(current.get("reservationDepositAmount"))
+      const depositAmount = Number.isFinite(depositTarget) && depositTarget >= 0
+        ? depositTarget
+        : calculateReservationDeposit(total, current.get("reservationDepositPercent") || 100)
+      const paymentMethod = action === "record-cash" ? "cash" : "gcash"
+      const amountReceived = action === "reject"
+        ? 0
+        : Math.max(0, Math.min(total - alreadyPaid, depositAmount - alreadyPaid))
+      if (action !== "reject" && amountReceived <= 0) throw new Error("PAYMENT_ALREADY_SETTLED")
+      const updatedPaid = Math.round((alreadyPaid + amountReceived) * 100) / 100
+      const nextPaymentStatus = action === "reject"
+        ? "rejected"
+        : updatedPaid >= total
+          ? "paid"
+          : "partially_paid"
+      const previousMethod = String(current.get("paymentMethod") || "")
+      const recordedMethod = previousMethod && previousMethod !== paymentMethod
+        ? "mixed"
+        : paymentMethod
+      const now = new Date()
       transaction.update(bookingRef, {
         paymentStatus: nextPaymentStatus,
-        paymentMethod: action === "record-cash" ? "cash" : "gcash",
-        paymentAmount: Number(current.get("totalPrice") || 0),
-        paymentReviewedAt: new Date(),
+        ...(action === "reject" ? {} : {
+          paymentMethod: recordedMethod,
+          paymentAmount: updatedPaid,
+          paidAt: now,
+        }),
+        paymentReviewedAt: now,
         paymentReviewedBy: authResult.user.uid,
         paymentReviewedByEmail: authResult.user.email,
-        updatedAt: new Date(),
+        updatedAt: now,
       })
       transaction.create(historyRef, {
         ownerUid: authResult.user.ownerUid,
@@ -94,10 +120,14 @@ export async function POST(request) {
         roomType: String(current.get("roomType") || ""),
         checkIn: String(current.get("checkIn") || ""),
         checkOut: String(current.get("checkOut") || ""),
-        action: action === "record-cash" ? "cash-recorded" : action,
+        action: action === "reject"
+          ? "payment-rejected"
+          : action === "record-cash"
+            ? "deposit-cash-recorded"
+            : "deposit-gcash-verified",
         paymentStatus: nextPaymentStatus,
-        paymentMethod: action === "record-cash" ? "cash" : "gcash",
-        amount: Number(current.get("totalPrice") || 0),
+        paymentMethod,
+        amount: amountReceived,
         recordedBy: authResult.user.uid,
         recordedByEmail: authResult.user.email,
         createdAt: new Date(),
@@ -107,39 +137,44 @@ export async function POST(request) {
         actorUid: authResult.user.uid,
         actorEmail: authResult.user.email,
         actorRole: authResult.user.staffRole,
-        action: nextPaymentStatus === "paid" ? "payment.received" : "payment.rejected",
+        action: action === "reject" ? "payment.rejected" : "payment.received",
         entityType: "booking",
         entityId: bookingId,
-        summary: nextPaymentStatus === "paid"
-          ? "A booking payment was recorded as received."
-          : "A booking payment submission was rejected.",
+        summary: action === "reject"
+          ? `Payment proof for booking ${bookingId} was rejected.`
+          : `Reservation deposit of PHP ${amountReceived.toLocaleString("en-PH")} was received for booking ${bookingId}.`,
         before: { paymentStatus: status },
         after: {
           paymentStatus: nextPaymentStatus,
           paymentMethod: action === "record-cash" ? "cash" : "gcash",
-          paymentAmount: Number(current.get("totalPrice") || 0),
+          paymentAmount: updatedPaid,
         },
-        ...(nextPaymentStatus === "paid"
+        emailRecipients: current.get("email") ? [String(current.get("email"))] : [],
+        ...(action !== "reject"
           ? {
               notification: {
                 type: "payment.received",
-                title: "Payment received",
-                message: `A ${action === "record-cash" ? "cash" : "GCash"} payment for booking ${bookingId} was recorded as received.`,
+                title: "Reservation deposit received",
+                message: `${action === "record-cash" ? "Cash" : "GCash"} deposit of PHP ${amountReceived.toLocaleString("en-PH")} received for booking ${bookingId}. Balance due at check-in: PHP ${Math.max(0, total - updatedPaid).toLocaleString("en-PH")}.`,
               },
             }
           : {}),
       })
+      return { paymentStatus: nextPaymentStatus, paymentAmount: updatedPaid, amountReceived }
     })
 
     return Response.json({
       success: true,
       bookingId,
-      paymentStatus: nextPaymentStatus,
+      ...paymentResult,
       paymentMethod: action === "record-cash" ? "cash" : "gcash",
     })
   } catch (error) {
     if (error.message === "PAYMENT_REVIEW_CHANGED") {
       return jsonFailure("Payment status changed. Refresh and try again.", 409)
+    }
+    if (error.message === "PAYMENT_ALREADY_SETTLED") {
+      return jsonFailure("The reservation deposit is already paid.", 409)
     }
     console.error("Failed to update booking payment status:", error)
     return jsonFailure("Payment status could not be updated.", 500)

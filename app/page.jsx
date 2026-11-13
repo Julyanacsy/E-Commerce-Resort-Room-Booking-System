@@ -21,6 +21,7 @@ import {
 } from "lucide-react"
 import { BRANDING_DEFAULTS, useBranding } from "@/hooks/use-branding"
 import { normalizeOwnerUidFromSearchParam } from "@/lib/booking-tenant"
+import { calculateReservationDeposit, DEFAULT_RESERVATION_DEPOSIT_PERCENT } from "@/lib/payment-domain.mjs"
 import { useMarketplaceSettings } from "@/hooks/use-marketplace-settings"
 import { useResortOwnerBranding } from "@/hooks/use-resort-owner-branding"
 import DynamicHead from "@/components/dynamic-head"
@@ -426,6 +427,7 @@ export default function Home() {
   const [cancellationTermsConfirmed, setCancellationTermsConfirmed] = useState(false)
   const [paymentQrUrl, setPaymentQrUrl] = useState("")
   const [paymentInstructions, setPaymentInstructions] = useState("")
+  const [reservationDepositPercent, setReservationDepositPercent] = useState(DEFAULT_RESERVATION_DEPOSIT_PERCENT)
   const [proofOfPaymentImage, setProofOfPaymentImage] = useState("")
   const [validIdImage, setValidIdImage] = useState("")
   const [uploadingProof, setUploadingProof] = useState(false)
@@ -479,6 +481,8 @@ export default function Home() {
   const pricePerNight = discount > 0 ? basePrice * (1 - discount / 100) : basePrice
   const nights = calculateNights(formData.checkIn, formData.checkOut)
   const estimatedTotal = nights > 0 ? pricePerNight * nights : 0
+  const estimatedDeposit = calculateReservationDeposit(estimatedTotal, reservationDepositPercent)
+  const estimatedBalance = Math.max(0, Math.round((estimatedTotal - estimatedDeposit) * 100) / 100)
   const formatPhp = (n) =>
     `₱${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
 
@@ -486,6 +490,7 @@ export default function Home() {
     if (!db || !bookingOwnerUid) {
       setPaymentQrUrl("")
       setPaymentInstructions("")
+      setReservationDepositPercent(DEFAULT_RESERVATION_DEPOSIT_PERCENT)
       return undefined
     }
     let active = true
@@ -497,12 +502,14 @@ export default function Home() {
         if (!active) return
         setPaymentQrUrl(String(result.gcashQrImage || "").trim())
         setPaymentInstructions(String(result.paymentInstructions || "").trim())
+        setReservationDepositPercent(Number(result.reservationDepositPercent) || DEFAULT_RESERVATION_DEPOSIT_PERCENT)
       })
       .catch((error) => {
         console.error("Failed to load resort payment details:", error)
         if (active) {
           setPaymentQrUrl("")
           setPaymentInstructions("")
+          setReservationDepositPercent(DEFAULT_RESERVATION_DEPOSIT_PERCENT)
         }
       })
     return () => {
@@ -2191,8 +2198,20 @@ export default function Home() {
                       </div>
                       <div className="text-sm text-emerald-900/90">
                         <p className="font-semibold">Scan to pay via GCash.</p>
+                        {estimatedTotal > 0 ? (
+                          <div className="mt-3 rounded-lg border border-emerald-200 bg-white/80 p-3">
+                            <p className="font-semibold">Reservation payment breakdown</p>
+                            <div className="mt-2 space-y-1 text-xs">
+                              <p className="flex justify-between gap-3"><span>Estimated stay total</span><strong>{formatPhp(estimatedTotal)}</strong></p>
+                              <p className="flex justify-between gap-3"><span>Due now ({reservationDepositPercent}% deposit)</span><strong>{formatPhp(estimatedDeposit)}</strong></p>
+                              <p className="flex justify-between gap-3"><span>Balance due at check-in</span><strong>{formatPhp(estimatedBalance)}</strong></p>
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="mt-3 text-xs text-emerald-900/70">Select a room and stay dates to see the deposit due.</p>
+                        )}
                         <p className="mt-1 text-xs text-emerald-900/70">
-                          After payment, upload your proof of payment and 1 valid ID below, then proceed to OTP.
+                          Pay the reservation deposit only. The remaining balance is collected at check-in. After paying the deposit, upload its proof and 1 valid ID below, then proceed to OTP.
                         </p>
                         {paymentInstructions ? (
                           <p className="mt-2 text-xs text-emerald-900/80">{paymentInstructions}</p>

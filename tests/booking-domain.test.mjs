@@ -135,7 +135,9 @@ test("booking status transitions reject invalid or terminal transitions", () => 
 
 test("payment actions enforce payment status and required evidence", () => {
   assert.equal(getPaymentActionError("record-cash", "unpaid", "Pending", false, false), null)
-  assert.match(getPaymentActionError("record-cash", "paid", "Pending", false, false), /already marked/)
+  assert.match(getPaymentActionError("record-cash", "paid", "Pending", false, false), /already been recorded/)
+  assert.match(getPaymentActionError("record-cash", "partially_paid", "Pending", false, false), /already been recorded/)
+  assert.match(getPaymentActionError("record-cash", "proof_submitted", "Pending", true, true), /Review or reject/)
   assert.equal(getPaymentActionError("mark-as-paid", "proof_submitted", "Pending", true, true), null)
   assert.match(getPaymentActionError("mark-as-paid", "proof_submitted", "Pending", true, false), /ID/)
   assert.equal(getPaymentActionError("reject", "proof_submitted", "Approved", true, false), null)

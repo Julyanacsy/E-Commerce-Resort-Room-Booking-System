@@ -17,6 +17,7 @@ import {
   overlaps,
 } from "@/lib/booking-api-server"
 import { normalizeOwnerUid } from "@/lib/booking-tenant"
+import { calculateReservationDeposit, DEFAULT_RESERVATION_DEPOSIT_PERCENT } from "@/lib/payment-domain.mjs"
 import { verifyOtpInTransaction } from "@/lib/otp-store"
 import { writeResortAdminEvent } from "@/lib/resort-admin-events.mjs"
 
@@ -115,6 +116,17 @@ export async function POST(request) {
     if (!Number.isFinite(totalPrice)) {
       return Response.json({ error: "The selected room price is too large to process." }, { status: 409 })
     }
+    let reservationDepositPercent = DEFAULT_RESERVATION_DEPOSIT_PERCENT
+    if (ownerUid) {
+      const ownerSnapshot = await db.collection("resortOwners").doc(ownerUid).get()
+      if (ownerSnapshot.exists) {
+        const configuredPercent = Number(ownerSnapshot.get("reservationDepositPercent"))
+        if (Number.isInteger(configuredPercent) && configuredPercent >= 1 && configuredPercent <= 100) {
+          reservationDepositPercent = configuredPercent
+        }
+      }
+    }
+    const reservationDepositAmount = calculateReservationDeposit(totalPrice, reservationDepositPercent)
     const bookingRef = db.collection("guestbooking").doc()
     const paymentHistoryRef = ownerUid ? db.collection("paymentHistory").doc() : null
     const roomKey = getRoomKey(ownerUid, roomType)
@@ -137,6 +149,9 @@ export async function POST(request) {
       nights,
       pricePerNight,
       totalPrice,
+      reservationDepositPercent,
+      reservationDepositAmount,
+      paymentAmount: 0,
       cancellationTermsAcknowledgedAt: new Date(),
       status: "Pending",
       paymentStatus: ownerUid ? "proof_submitted" : "unpaid",
@@ -185,7 +200,7 @@ export async function POST(request) {
           action: "proof-submitted",
           paymentStatus: "proof_submitted",
           paymentMethod: "gcash",
-          amount: totalPrice,
+          amount: reservationDepositAmount,
           recordedBy: "guest",
           createdAt: new Date(),
         })
@@ -201,10 +216,11 @@ export async function POST(request) {
           entityId: bookingRef.id,
           summary: "A new guest booking was submitted.",
           after: { bookingStatus: "Pending", paymentStatus: bookingData.paymentStatus },
+          emailRecipients: [email],
           notification: {
             type: "booking.new",
             title: "New booking",
-            message: `A booking request for ${roomType} (${bookingRef.id}) is waiting for review.`,
+            message: `A booking request for ${roomType} (${bookingRef.id}) is waiting for review. Reservation deposit: PHP ${reservationDepositAmount.toLocaleString("en-PH")} (${reservationDepositPercent}%).`,
           },
         })
       }
@@ -233,20 +249,23 @@ export async function POST(request) {
     try {
       const mail = await resolveCentralEnvMail()
       if (mail.ok) {
+        const reservationPaymentNote = ownerUid
+          ? `\nReservation deposit due now: PHP ${reservationDepositAmount.toLocaleString("en-PH")} (${reservationDepositPercent}%). Remaining balance due at check-in: PHP ${Math.max(0, totalPrice - reservationDepositAmount).toLocaleString("en-PH")}.`
+          : ""
         await mail.transporter.sendMail({
           from: `"${mail.brandName}" <${mail.user}>`,
           to: email,
           replyTo: mail.replyTo,
           subject: `Booking request received — ${mail.brandName}`,
-          text: `Hello ${name}, your booking request for ${roomType} from ${checkIn} to ${checkOut} has been received and is pending resort approval. Booking reference: ${bookingRef.id}.`,
-          html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#1f2937"><h2>Booking request received</h2><p>Hello ${name.replace(/[<>&"]/g, "")},</p><p>Your request for <strong>${roomType.replace(/[<>&"]/g, "")}</strong> from ${checkIn} to ${checkOut} has been received and is pending resort approval.</p><p>Booking reference: <strong>${bookingRef.id}</strong></p></div>`,
+          text: `Hello ${name}, your booking request for ${roomType} from ${checkIn} to ${checkOut} has been received and is pending resort approval. Booking reference: ${bookingRef.id}.${reservationPaymentNote}`,
+          html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#1f2937"><h2>Booking request received</h2><p>Hello ${name.replace(/[<>&"]/g, "")},</p><p>Your request for <strong>${roomType.replace(/[<>&"]/g, "")}</strong> from ${checkIn} to ${checkOut} has been received and is pending resort approval.</p><p>Booking reference: <strong>${bookingRef.id}</strong></p>${ownerUid ? `<p>Reservation deposit due now: <strong>PHP ${reservationDepositAmount.toLocaleString("en-PH")}</strong> (${reservationDepositPercent}%). Remaining balance due at check-in: <strong>PHP ${Math.max(0, totalPrice - reservationDepositAmount).toLocaleString("en-PH")}</strong>.</p>` : ""}</div>`,
         })
         const adminEmail = resolveAdminInboxEmail({
           brandingEmail: mail.brandingEmail,
           replyTo: mail.replyTo,
           smtpUser: mail.user,
         })
-        if (adminEmail) {
+        if (adminEmail && !ownerUid) {
           await mail.transporter.sendMail({
             from: `"${getResortAdminMailDisplayName()}" <${mail.user}>`,
             to: adminEmail,
