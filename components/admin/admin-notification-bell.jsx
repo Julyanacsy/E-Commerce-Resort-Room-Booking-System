@@ -126,7 +126,7 @@ export default function AdminNotificationBell({ onOpenAuditLog, onOpenLostAndFou
                       <time className="mt-2 block text-xs text-muted-foreground" dateTime={notification.createdAt || undefined}>
                         {formatCreatedAt(notification.createdAt)}
                       </time>
-                      {String(notification.type || "").startsWith("lost-found-") ? (
+                      {onOpenLostAndFound && String(notification.type || "").startsWith("lost-found-") ? (
                         <button
                           type="button"
                           onClick={() => {
@@ -157,19 +157,21 @@ export default function AdminNotificationBell({ onOpenAuditLog, onOpenLostAndFou
               ))}
             </ul>
           )}
-          <footer className="border-t border-border p-3">
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false)
-                onOpenAuditLog()
-              }}
-              className="inline-flex items-center gap-2 text-sm font-semibold text-emerald-800 hover:underline"
-            >
-              <ClipboardList className="h-4 w-4" aria-hidden="true" />
-              View audit log
-            </button>
-          </footer>
+          {onOpenAuditLog ? (
+            <footer className="border-t border-border p-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false)
+                  onOpenAuditLog()
+                }}
+                className="inline-flex items-center gap-2 text-sm font-semibold text-emerald-800 hover:underline"
+              >
+                <ClipboardList className="h-4 w-4" aria-hidden="true" />
+                View audit log
+              </button>
+            </footer>
+          ) : null}
         </section>
       ) : null}
     </div>

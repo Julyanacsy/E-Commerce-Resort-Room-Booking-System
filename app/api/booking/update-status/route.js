@@ -128,8 +128,8 @@ export async function POST(request) {
           entityType: "booking",
           entityId: bookingId,
           summary: status === "Cancelled"
-            ? "A booking was cancelled."
-            : `Booking status changed to ${status}.`,
+            ? `Booking ${bookingId} for ${String(current.get("roomType") || "a room")} was cancelled.`
+            : `Booking ${bookingId} status changed to ${status}.`,
           before: {
             bookingStatus: current.get("status"),
             refundAmount: Number(current.get("refundAmount") || 0),
@@ -150,6 +150,7 @@ export async function POST(request) {
                 },
               }
             : {}),
+          emailRecipients: booking.email ? [booking.email] : [],
         })
       }
     })

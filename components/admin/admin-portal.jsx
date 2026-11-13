@@ -1422,10 +1422,14 @@ export default function AdminPage({ portalMode }) {
                 ))}
               </section>
             ) : null}
-            {staffRole === "owner" && !isLegacyHelpdesk ? (
+            {!isLegacyHelpdesk ? (
               <AdminNotificationBell
-                onOpenAuditLog={() => setCurrentPage("audit-log")}
-                onOpenLostAndFound={() => setCurrentPage("lost-and-found")}
+                onOpenAuditLog={staffRole === "owner" ? () => setCurrentPage("audit-log") : undefined}
+                onOpenLostAndFound={
+                  ["owner", "admin", "front-desk"].includes(staffRole)
+                    ? () => setCurrentPage("lost-and-found")
+                    : undefined
+                }
               />
             ) : null}
             <div className="mb-6 flex items-center justify-between gap-3 lg:hidden">

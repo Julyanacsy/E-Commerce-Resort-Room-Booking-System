@@ -23,6 +23,8 @@ import {
   ChevronsLeft,
   ChevronsRight,
   ArchiveRestore,
+  Bell,
+  Check,
   Download,
   Search,
   LayoutDashboard,
@@ -300,6 +302,7 @@ export default function SuperAdminPage() {
   const [currentPage, setCurrentPage] = useState("resorts")
   const [sidebarExpanded, setSidebarExpanded] = useState(true)
   const [mobileSidebarVisible, setMobileSidebarVisible] = useState(false)
+  const [platformNotificationsOpen, setPlatformNotificationsOpen] = useState(false)
   const [theme, setTheme] = useState(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("super-admin-theme")
@@ -316,6 +319,7 @@ export default function SuperAdminPage() {
   const [mpSaving, setMpSaving] = useState(false)
   const [auditLogs, setAuditLogs] = useState([])
   const [auditLoading, setAuditLoading] = useState(true)
+  const [platformNotifications, setPlatformNotifications] = useState([])
   const [auditSearch, setAuditSearch] = useState("")
   const [auditActionFilter, setAuditActionFilter] = useState("all")
   const [auditActorFilter, setAuditActorFilter] = useState("")
@@ -477,6 +481,35 @@ export default function SuperAdminPage() {
     )
     return () => unsub()
   }, [authed, fireAuthUser])
+
+  useEffect(() => {
+    if (!db || !authed || !isAllowedSuperAdminEmail(fireAuthUser?.email || "")) return
+    const notificationsQuery = query(
+      collection(db, "superAdminNotifications"),
+      orderBy("createdAt", "desc"),
+      limit(30),
+    )
+    return onSnapshot(
+      notificationsQuery,
+      (snapshot) => setPlatformNotifications(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))),
+      (error) => {
+        console.error("Platform notifications listen failed", error)
+        toast.error("Could not load Super Admin notifications.")
+      },
+    )
+  }, [authed, fireAuthUser])
+
+  const markPlatformNotificationRead = async (notificationId) => {
+    try {
+      await updateDoc(doc(db, "superAdminNotifications", notificationId), {
+        read: true,
+        readAt: serverTimestamp(),
+      })
+    } catch (error) {
+      console.error("Platform notification update failed", error)
+      toast.error("Notification could not be marked as read.")
+    }
+  }
 
   useEffect(() => {
     if (!db || !authed || !fireAuthUser?.email) return
@@ -1429,6 +1462,63 @@ export default function SuperAdminPage() {
                   <p className="text-xs text-muted-foreground">Review listings</p>
                 </div>
               </div>
+            </div>
+
+            <div className="relative mb-5 flex justify-end">
+              <button
+                type="button"
+                aria-label={`Platform notifications, ${platformNotifications.filter((item) => item.read !== true).length} unread`}
+                aria-expanded={platformNotificationsOpen}
+                onClick={() => setPlatformNotificationsOpen((open) => !open)}
+                className={`relative inline-flex h-11 w-11 items-center justify-center rounded-full border shadow-sm ${
+                  theme === "dark"
+                    ? "border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
+                    : "border-emerald-100 bg-white text-emerald-900 hover:bg-emerald-50"
+                }`}
+              >
+                <Bell size={20} aria-hidden="true" />
+                {platformNotifications.some((item) => item.read !== true) ? (
+                  <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-red-600 px-1 text-center text-xs font-bold leading-5 text-white">
+                    {platformNotifications.filter((item) => item.read !== true).length}
+                  </span>
+                ) : null}
+              </button>
+              {platformNotificationsOpen ? (
+                <section className={`absolute right-0 top-14 z-40 w-[min(26rem,calc(100vw-2rem))] overflow-hidden rounded-xl border shadow-xl ${
+                  theme === "dark" ? "border-slate-700 bg-slate-800" : "border-emerald-100 bg-white"
+                }`}>
+                  <header className="border-b border-border p-4">
+                    <h2 className={`font-semibold ${headingClass}`}>Platform notifications</h2>
+                    <p className="text-xs text-muted-foreground">
+                      {platformNotifications.filter((item) => item.read !== true).length} unread
+                    </p>
+                  </header>
+                  {platformNotifications.length === 0 ? (
+                    <p className="p-4 text-sm text-muted-foreground">No platform updates yet.</p>
+                  ) : (
+                    <ul className="max-h-[min(60vh,28rem)] divide-y divide-border overflow-y-auto">
+                      {platformNotifications.slice(0, 20).map((notification) => (
+                        <li key={notification.id} className={`flex items-start gap-3 p-4 ${notification.read ? "" : "bg-emerald-50/70 dark:bg-emerald-950/20"}`}>
+                          <div className="min-w-0 flex-1">
+                            <p className={`font-semibold ${headingClass}`}>{notification.title || "Platform update"}</p>
+                            <p className="mt-1 text-sm text-muted-foreground">{notification.message || ""}</p>
+                          </div>
+                          {notification.read !== true ? (
+                            <button
+                              type="button"
+                              aria-label="Mark notification as read"
+                              onClick={() => markPlatformNotificationRead(notification.id)}
+                              className="rounded-md p-2 text-emerald-800 hover:bg-emerald-100 dark:text-emerald-300 dark:hover:bg-slate-700"
+                            >
+                              <Check size={16} aria-hidden="true" />
+                            </button>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              ) : null}
             </div>
 
             {currentPage === "approvals" && (

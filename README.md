@@ -129,6 +129,8 @@ Open [http://localhost:3000](http://localhost:3000). Check container output with
 
 The booking total is calculated and validated by the server from the selected room rate and stay dates. The guest must acknowledge that cancellation and refund terms are set by the resort and should be confirmed directly before payment. Availability is checked again inside a Firestore transaction; per-night lock documents prevent simultaneous requests from reserving the same room type and dates.
 
+Resorts can set the reservation deposit percentage. Guests pay that deposit to reserve, and the remaining verified balance is collected at check-in.
+
 ### Admin Dashboard
 - **Overview**: Revenue charts, booking statistics
 - **Manage Bookings**: Approve, decline, cancel bookings
@@ -136,10 +138,11 @@ The booking total is calculated and validated by the server from the selected ro
 - **Contact Messages**: View and manage contact inquiries
 - **Feedback**: Publish/hide guest feedback
 - **Brand Settings**: Customize branding and contact info
-- **Payments**: Review payments, download booking invoices, export an Excel-compatible payment report, and review payment history
+- **Payments**: Set the reservation deposit percentage, review deposits and check-in balances, download booking invoices, export an Excel-compatible payment report, and review payment history
 - **Booking Calendar**: View room availability by day and see occupied room types
 - **Check-in / Check-out**: Record arrival and departure with timestamps
-- **Email Reminders**: Booking confirmations, check-in instructions, and post-stay follow-ups
+- **Email Reminders**: Booking confirmation emails include resort rules; scheduled check-in and checkout reminders are sent one day before each date
+- **Audit Log**: Review resort and staff activity, with role-targeted in-app and email notifications
 - **Cancellations / Refunds**: Record cancellation reasons and manually track refund amounts, dates, and statuses
 - **Staff Accounts**: Convert existing accounts or create new staff accounts with Admin, Front desk, or Finance permissions; approve pending accounts and revoke access
 

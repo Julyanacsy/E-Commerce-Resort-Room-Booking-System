@@ -1,4 +1,5 @@
 import { writeResortAdminAudit } from "@/lib/resort-admin-events.mjs"
+import { FieldValue } from "firebase-admin/firestore"
 import {
   authenticateBookingAdmin,
   getBookingDb,
@@ -11,7 +12,7 @@ const MARK_ALL_BATCH_SIZE = 400
 export async function GET(request) {
   const authResult = await authenticateBookingAdmin(request)
   if (authResult.error) return jsonFailure(authResult.error, authResult.status)
-  if (!authResult.user.isOwner) return jsonFailure("Only the resort admin can view these notifications.", 403)
+  if (!authResult.user.ownerUid) return jsonFailure("Resort notifications are unavailable.", 403)
 
   const db = getBookingDb()
   if (!db) return jsonFailure("Firebase Admin credentials are not configured.", 503)
@@ -21,18 +22,27 @@ export async function GET(request) {
       .collection("resortOwners")
       .doc(authResult.user.ownerUid)
       .collection("adminNotifications")
-    const [snapshot, unreadSnapshot] = await Promise.all([
-      notificationsRef.orderBy("read", "asc").orderBy("createdAt", "desc").limit(MAX_NOTIFICATION_PAGE_SIZE).get(),
-      notificationsRef.where("read", "==", false).count().get(),
-    ])
-    const notifications = snapshot.docs.map((item) => ({
-      id: item.id,
-      ...item.data(),
-      createdAt: item.get("createdAt")?.toDate?.().toISOString() || null,
-    }))
+    const isOwner = authResult.user.isOwner
+    const role = String(authResult.user.staffRole || "")
+    const query = isOwner
+      ? notificationsRef.orderBy("createdAt", "desc")
+      : notificationsRef
+        .where("audienceRoles", "array-contains", role)
+        .orderBy("createdAt", "desc")
+    const snapshot = await query.limit(MAX_NOTIFICATION_PAGE_SIZE).get()
+    const notifications = snapshot.docs.map((item) => {
+      const readBy = item.get("readBy") || []
+      const read = isOwner ? item.get("read") === true : readBy.includes(authResult.user.uid)
+      return {
+        id: item.id,
+        ...item.data(),
+        read,
+        createdAt: item.get("createdAt")?.toDate?.().toISOString() || null,
+      }
+    })
     return Response.json({
       notifications,
-      unreadCount: unreadSnapshot.data().count,
+      unreadCount: notifications.filter((item) => !item.read).length,
     }, { headers: { "Cache-Control": "no-store" } })
   } catch (error) {
     console.error("Failed to load resort admin notifications:", error)
@@ -43,7 +53,7 @@ export async function GET(request) {
 export async function PATCH(request) {
   const authResult = await authenticateBookingAdmin(request)
   if (authResult.error) return jsonFailure(authResult.error, authResult.status)
-  if (!authResult.user.isOwner) return jsonFailure("Only the resort admin can update these notifications.", 403)
+  if (!authResult.user.ownerUid) return jsonFailure("Resort notifications are unavailable.", 403)
 
   const db = getBookingDb()
   if (!db) return jsonFailure("Firebase Admin credentials are not configured.", 503)
@@ -78,17 +88,30 @@ export async function PATCH(request) {
 
   try {
     let updatedCount = 0
+    const isOwner = authResult.user.isOwner
+    const role = String(authResult.user.staffRole || "")
+    const updateReadState = (transaction, notificationRef) => {
+      transaction.update(notificationRef, isOwner
+        ? { read: true, readAt: new Date() }
+        : { readBy: FieldValue.arrayUnion(authResult.user.uid) })
+    }
     if (action === "mark-read") {
       await db.runTransaction(async (transaction) => {
         const notificationRef = notificationsRef.doc(notificationId)
         const snapshot = await transaction.get(notificationRef)
-        if (!snapshot.exists) {
+        if (!snapshot.exists || (!isOwner && !(
+          Array.isArray(snapshot.get("audienceRoles"))
+          && snapshot.get("audienceRoles").includes(authResult.user.staffRole)
+        ))) {
           const error = new Error("Notification not found.")
           error.status = 404
           throw error
         }
-        if (snapshot.get("read") !== true) {
-          transaction.update(notificationRef, { read: true, readAt: new Date() })
+        const alreadyRead = isOwner
+          ? snapshot.get("read") === true
+          : (snapshot.get("readBy") || []).includes(authResult.user.uid)
+        if (!alreadyRead) {
+          updateReadState(transaction, notificationRef)
           writeResortAdminAudit(transaction, db, {
             ...actor,
             action: "notification.mark-read",
@@ -101,29 +124,43 @@ export async function PATCH(request) {
         }
       })
     } else {
-      let batchCount
+      let cursor = null
       do {
-        batchCount = await db.runTransaction(async (transaction) => {
-          const unread = await transaction.get(
-            notificationsRef.where("read", "==", false).limit(MARK_ALL_BATCH_SIZE),
-          )
-          for (const notification of unread.docs) {
-            transaction.update(notification.ref, { read: true, readAt: new Date() })
-          }
-          if (unread.size > 0) {
-            writeResortAdminAudit(transaction, db, {
-              ...actor,
-              action: "notification.mark-all-read",
-              entityType: "admin-notification",
-              entityId: "",
-              summary: `Marked ${unread.size} admin notifications as read.`,
-              after: { status: "read" },
-            })
-          }
-          return unread.size
+        let candidatesQuery = isOwner
+          ? notificationsRef.orderBy("createdAt", "desc")
+          : notificationsRef
+            .where("audienceRoles", "array-contains", role)
+            .orderBy("createdAt", "desc")
+        if (cursor) candidatesQuery = candidatesQuery.startAfter(cursor)
+        const candidates = await candidatesQuery.limit(MARK_ALL_BATCH_SIZE).get()
+        cursor = candidates.docs.at(-1) || null
+        const unread = candidates.docs.filter((notification) => (
+          isOwner
+            ? notification.get("read") !== true
+            : !(notification.get("readBy") || []).includes(authResult.user.uid)
+        ))
+        if (unread.length) {
+          const batch = db.batch()
+          unread.forEach((notification) => {
+            updateReadState(batch, notification.ref)
+          })
+          await batch.commit()
+          updatedCount += unread.length
+        }
+        if (candidates.size < MARK_ALL_BATCH_SIZE) cursor = null
+      } while (cursor)
+      if (updatedCount > 0) {
+        await db.runTransaction(async (transaction) => {
+          writeResortAdminAudit(transaction, db, {
+            ...actor,
+            action: "notification.mark-all-read",
+            entityType: "admin-notification",
+            entityId: "",
+            summary: `Marked ${updatedCount} resort notifications as read.`,
+            after: { status: "read" },
+          })
         })
-        updatedCount += batchCount
-      } while (batchCount === MARK_ALL_BATCH_SIZE)
+      }
     }
     return Response.json({ success: true, updatedCount })
   } catch (error) {

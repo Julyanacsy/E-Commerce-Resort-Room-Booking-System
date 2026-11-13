@@ -52,7 +52,8 @@ service cloud.firestore {
             "updatedAt",
             "gcashQrImage",
             "paymentInstructions",
-            "checkInInstructions"
+            "checkInInstructions",
+            "resortRulesText"
           ]));
       allow delete: if isSuperAdminEmail();
 
@@ -174,12 +175,76 @@ service cloud.firestore {
       function isSuperAdminEmail() {
         return request.auth != null
           && request.auth.token.email != null
+          && request.auth.token.email_verified == true
           && (request.auth.token.email == "ecommerceresortadmin@gmail.com"
               || request.auth.token.email == "commerceresortadmin@gmail.com");
       }
       allow read: if isSuperAdminEmail();
       allow create: if isSuperAdminEmail();
       allow update, delete: if false;
+    }
+
+    match /superAdminNotifications/{notificationId} {
+      function isVerifiedSuperAdminEmail() {
+        return request.auth != null
+          && request.auth.token.email != null
+          && request.auth.token.email_verified == true
+          && (request.auth.token.email == "ecommerceresortadmin@gmail.com"
+              || request.auth.token.email == "commerceresortadmin@gmail.com");
+      }
+
+      allow read: if isVerifiedSuperAdminEmail();
+      allow create: if isVerifiedSuperAdminEmail()
+        && request.resource.data.get("actorUid", "") == request.auth.uid
+        && request.resource.data.get("read", false) == false
+        && request.resource.data.keys().hasOnly([
+          "type",
+          "title",
+          "message",
+          "resortId",
+          "ownerUid",
+          "actorUid",
+          "read",
+          "createdAt"
+        ]);
+      allow update: if isVerifiedSuperAdminEmail()
+        && request.resource.data.get("read", false) == true
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["read", "readAt"]);
+      allow delete: if false;
+    }
+
+    match /resortNotificationOutbox/{eventId} {
+      function isVerifiedSuperAdminEmail() {
+        return request.auth != null
+          && request.auth.token.email != null
+          && request.auth.token.email_verified == true
+          && (request.auth.token.email == "ecommerceresortadmin@gmail.com"
+              || request.auth.token.email == "commerceresortadmin@gmail.com");
+      }
+
+      allow create: if isVerifiedSuperAdminEmail()
+        && request.resource.data.get("eventId", "") == eventId
+        && request.resource.data.get("actorUid", "") == request.auth.uid
+        && request.resource.data.get("entityType", "") == "platform"
+        && request.resource.data.get("platformAdminRecipient", false) == true
+        && request.resource.data.get("status", "") == "pending"
+        && request.resource.data.get("attempts", -1) == 0
+        && request.resource.data.keys().hasOnly([
+          "ownerUid",
+          "eventId",
+          "action",
+          "entityType",
+          "entityId",
+          "audienceRoles",
+          "title",
+          "message",
+          "actorUid",
+          "platformAdminRecipient",
+          "status",
+          "attempts",
+          "createdAt"
+        ]);
+      allow read, update, delete: if false;
     }
 
     // Settings: public read except resort SMTP doc (super admin only).
@@ -209,7 +274,10 @@ service cloud.firestore {
         "bookingDateLocks",
         "paymentHistory",
         "resortOwners",
-        "resorts"
+        "resorts",
+        "superAdminAuditLog",
+        "superAdminNotifications",
+        "resortNotificationOutbox"
       ]) && request.auth != null;
     }
   }
