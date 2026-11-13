@@ -56,6 +56,7 @@ import { BRANDING_DEFAULTS, useBranding } from "@/hooks/use-branding"
 import { useResortOwnerBranding } from "@/hooks/use-resort-owner-branding"
 import { useMarketplaceSettings } from "@/hooks/use-marketplace-settings"
 import { normalizeOwnerUidFromSearchParam } from "@/lib/booking-tenant"
+import { resortAdminRequest } from "@/lib/admin-api-client"
 import { useIsMobile } from "@/hooks/use-mobile"
 import Cropper from "react-easy-crop"
 import { Toaster } from "@/components/ui/sonner"
@@ -165,10 +166,8 @@ export default function AdminPage({ portalMode }) {
   const [addRoomOpen, setAddRoomOpen] = useState(false)
   const [previewRoom, setPreviewRoom] = useState(null)
   const [previewOpen, setPreviewOpen] = useState(false)
-  const [pendingDeleteId, setPendingDeleteId] = useState(null)
-  const [deletingId, setDeletingId] = useState(null)
+  const [busyRoomId, setBusyRoomId] = useState(null)
   const [loginOwnerUid, setLoginOwnerUid] = useState(null)
-  const ROOMS_PER_PAGE = 6
   const [rooms, setRooms] = useState([])
   const [roomsLoading, setRoomsLoading] = useState(true)
   const [roomsError, setRoomsError] = useState("")
@@ -987,25 +986,24 @@ export default function AdminPage({ portalMode }) {
 
   const handleRoomSave = async (payload) => {
     try {
-      if (!adminUser?.uid) throw new Error("Sign in again before saving a room.")
-      const ownerUid = adminUser.uid
-      await addDoc(collection(db, "rooms"), {
-        name: payload.name,
-        roomNumber: payload.number,
-        type: payload.type,
-        description: payload.description,
-        price: Number(payload.price) || 0,
-        discount: Number(payload.discount) || 0,
-        maxGuests: Number(payload.maxGuests) || 1,
-        bedType: payload.bedType,
-        beds: Number(payload.beds) || 1,
-        amenities: payload.amenities,
-        availability: payload.availability,
-        featured: Boolean(payload.featured),
-        images: payload.images,
-        mapsUrl: payload.mapsUrl || "",
-        createdAt: serverTimestamp(),
-        ownerUid,
+      await resortAdminRequest("/api/resort/rooms", {
+        action: "room.create",
+        room: {
+          name: payload.name,
+          roomNumber: payload.number,
+          type: payload.type,
+          description: payload.description,
+          price: Number(payload.price) || 0,
+          discount: Number(payload.discount) || 0,
+          maxGuests: Number(payload.maxGuests) || 1,
+          bedType: payload.bedType,
+          beds: Number(payload.beds) || 1,
+          amenities: payload.amenities,
+          availability: payload.availability,
+          featured: Boolean(payload.featured),
+          images: payload.images,
+          mapsUrl: payload.mapsUrl || "",
+        },
       })
 
       toast.success("Room saved successfully.")
@@ -1021,23 +1019,25 @@ export default function AdminPage({ portalMode }) {
     const roomId = payload.id || previewRoom?.id
     if (!roomId) return
     try {
-      if (!adminUser?.uid) throw new Error("Sign in again before updating a room.")
-      await updateDoc(doc(db, "rooms", roomId), {
-        name: payload.name,
-        roomNumber: payload.number,
-        type: payload.type,
-        description: payload.description,
-        price: Number(payload.price) || 0,
-        discount: Number(payload.discount) || 0,
-        maxGuests: Number(payload.maxGuests) || 1,
-        bedType: payload.bedType,
-        beds: Number(payload.beds) || 1,
-        amenities: payload.amenities,
-        availability: payload.availability,
-        featured: Boolean(payload.featured),
-        images: payload.images,
-        ownerUid: adminUser.uid,
-        updatedAt: serverTimestamp(),
+      await resortAdminRequest("/api/resort/rooms", {
+        action: "room.update",
+        roomId,
+        room: {
+          name: payload.name,
+          roomNumber: payload.number,
+          type: payload.type,
+          description: payload.description,
+          price: Number(payload.price) || 0,
+          discount: Number(payload.discount) || 0,
+          maxGuests: Number(payload.maxGuests) || 1,
+          bedType: payload.bedType,
+          beds: Number(payload.beds) || 1,
+          amenities: payload.amenities,
+          availability: payload.availability,
+          featured: Boolean(payload.featured),
+          images: payload.images,
+          mapsUrl: payload.mapsUrl || "",
+        },
       })
       toast.success("Room updated successfully.")
       setPreviewOpen(false)
@@ -1049,23 +1049,19 @@ export default function AdminPage({ portalMode }) {
     }
   }
 
-  const handleRoomDelete = async (roomId) => {
+  const handleRoomArchiveAction = async (roomId, action) => {
     if (!roomId) return
-    setDeletingId(roomId)
+    setBusyRoomId(roomId)
     try {
-      await deleteDoc(doc(db, "rooms", roomId))
-      toast.success("Room deleted successfully.")
-      setPendingDeleteId(null)
+      await resortAdminRequest("/api/resort/rooms", { action, roomId })
+      toast.success(action === "room.archive" ? "Room archived successfully." : "Room restored successfully.")
     } catch (error) {
-      console.error("Failed to delete room", error)
-      toast.error("Failed to delete room. Please try again.")
+      console.error("Failed to update room archive status", error)
+      toast.error(error.message || "Room status could not be updated.")
     } finally {
-      setDeletingId(null)
+      setBusyRoomId(null)
     }
   }
-
-  const totalRoomPages = Math.max(1, Math.ceil(rooms.length / ROOMS_PER_PAGE))
-  const paginatedRooms = rooms.slice((roomsPage - 1) * ROOMS_PER_PAGE, roomsPage * ROOMS_PER_PAGE)
 
   if (authLoading) {
     return (
@@ -1461,7 +1457,6 @@ export default function AdminPage({ portalMode }) {
           {currentPage === "manage-rooms" && (
             <ManageRooms
               rooms={rooms}
-              paginatedRooms={paginatedRooms}
               loading={roomsLoading}
               error={roomsError}
               theme={theme}
@@ -1470,13 +1465,10 @@ export default function AdminPage({ portalMode }) {
                 setPreviewRoom(room)
                 setPreviewOpen(true)
               }}
-              pendingDeleteId={pendingDeleteId}
-              deletingId={deletingId}
-              onConfirmDelete={handleRoomDelete}
-              onCancelDelete={() => setPendingDeleteId(null)}
-              onRequestDelete={setPendingDeleteId}
+              busyRoomId={busyRoomId}
+              onArchiveRoom={(roomId) => handleRoomArchiveAction(roomId, "room.archive")}
+              onRestoreRoom={(roomId) => handleRoomArchiveAction(roomId, "room.restore")}
               roomsPage={roomsPage}
-              totalRoomPages={totalRoomPages}
               onPageChange={setRoomsPage}
             />
           )}
