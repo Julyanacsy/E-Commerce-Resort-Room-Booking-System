@@ -2,16 +2,7 @@ import { resolveCentralEnvMail } from "@/lib/central-env-mail"
 import { renderBookingEmailLayout } from "@/lib/booking-email-layout"
 import { getBookingDb, getManilaDate, jsonFailure } from "@/lib/booking-api-server"
 import { writeResortAdminAudit } from "@/lib/resort-admin-events.mjs"
-
-function addDays(date, amount) {
-  const parsed = new Date(`${date}T00:00:00.000Z`)
-  parsed.setUTCDate(parsed.getUTCDate() + amount)
-  return parsed.toISOString().slice(0, 10)
-}
-
-function hasSentReminder(booking, kind) {
-  return booking.reminderEmails?.[kind]?.status === "sent"
-}
+import { getDueBookingReminderKinds } from "@/lib/booking-reminder-domain.mjs"
 
 export async function GET(request) {
   const secret = String(process.env.CRON_SECRET || "").trim()
@@ -29,10 +20,9 @@ export async function GET(request) {
   }
 
   const today = getManilaDate()
-  const tomorrow = addDays(today, 1)
-  const yesterday = addDays(today, -1)
   const sent = []
   const failures = []
+  const ownerSettings = new Map()
 
   try {
     const snapshot = await db
@@ -44,69 +34,75 @@ export async function GET(request) {
       const booking = item.data()
       if (!booking.email) continue
 
-      const reminders = []
-      if (booking.status === "Approved" && !booking.confirmationEmailSentAt && !hasSentReminder(booking, "confirmation")) {
-        reminders.push({
-          kind: "confirmation",
-          title: "Booking confirmed",
-          message: `Your booking for ${booking.roomType || "your room"} from ${booking.checkIn} to ${booking.checkOut} is approved.`,
-          subject: `Booking confirmed: ${item.id}`,
-        })
+      const ownerUid = String(booking.ownerUid || "")
+      let ownerData = {}
+      if (ownerUid && !ownerSettings.has(ownerUid)) {
+        const ownerSnapshot = await db.collection("resortOwners").doc(ownerUid).get()
+        ownerSettings.set(ownerUid, ownerSnapshot.exists ? ownerSnapshot.data() : {})
       }
-      if (
-        booking.status === "Approved" &&
-        booking.checkIn >= today &&
-        booking.checkIn <= tomorrow &&
-        !hasSentReminder(booking, "checkIn")
-      ) {
-        const ownerSnapshot = booking.ownerUid
-          ? await db.collection("resortOwners").doc(booking.ownerUid).get()
-          : null
-        const instructions = String(ownerSnapshot?.get("checkInInstructions") || "").trim()
-        reminders.push({
-          kind: "checkIn",
-          title: "Your stay starts tomorrow",
-          message: `We look forward to welcoming you tomorrow for your stay at ${booking.roomType || "the resort"}.${instructions ? ` Check-in instructions: ${instructions}` : " Please contact the resort if you need arrival instructions."}`,
-          subject: `Check-in reminder: ${item.id}`,
-        })
-      }
-      if (
-        ["Approved", "Completed"].includes(booking.status) &&
-        booking.checkOut <= yesterday &&
-        booking.checkOut >= addDays(today, -7) &&
-        !hasSentReminder(booking, "followUp")
-      ) {
-        reminders.push({
-          kind: "followUp",
-          title: "Thank you for staying with us",
-          message: `Thank you for choosing ${mail.brandName}. We hope you enjoyed your stay and would be happy to welcome you again.`,
-          subject: `Thank you for your stay: ${item.id}`,
-        })
-      }
+      ownerData = ownerUid ? ownerSettings.get(ownerUid) || {} : {}
+      const instructions = String(ownerData.checkInInstructions || "").trim()
+      const rules = String(ownerData.resortRulesText || "").trim()
+      const reminderKinds = getDueBookingReminderKinds(booking, today)
 
-      for (const reminder of reminders) {
+      for (const kind of reminderKinds) {
         try {
+          let reminder
+          if (kind === "confirmation") {
+            reminder = {
+              title: "Booking confirmed",
+              message: `Your booking for ${booking.roomType || "your room"} from ${booking.checkIn} to ${booking.checkOut} is approved.`,
+              subject: `Booking confirmed: ${item.id}`,
+              details: [
+                ...(rules ? [{ title: "Resort rules and regulations", body: rules }] : []),
+                ...(instructions ? [{ title: "Check-in instructions", body: instructions }] : []),
+              ],
+            }
+          } else if (kind === "checkIn") {
+            reminder = {
+              title: "Check-in reminder",
+              message: `Your stay at ${booking.roomType || "the resort"} begins tomorrow, ${booking.checkIn}.`,
+              subject: `Check-in reminder: ${item.id}`,
+              details: instructions ? [{ title: "Check-in instructions", body: instructions }] : [],
+            }
+          } else if (kind === "checkOut") {
+            reminder = {
+              title: "Check-out reminder",
+              message: `Your stay at ${booking.roomType || "the resort"} ends tomorrow, ${booking.checkOut}. Please follow the resort's check-out time and return any keys or access items.`,
+              subject: `Check-out reminder: ${item.id}`,
+            }
+          } else if (kind === "checkOut") {
+            reminder = {
+              title: "Check-out reminder",
+              message: `Your stay at ${booking.roomType || "the resort"} ends tomorrow, ${booking.checkOut}. Please follow the resort's check-out time and return any keys or access items.`,
+              subject: `Check-out reminder: ${item.id}`,
+            }
+          }
+
           await mail.transporter.sendMail({
             from: `"${mail.brandName}" <${mail.user}>`,
             to: booking.email,
             replyTo: mail.replyTo,
             subject: reminder.subject,
-            text: `${reminder.message}\nBooking reference: ${item.id}`,
+            text: `${reminder.message}\nBooking reference: ${item.id}${reminder.details?.length
+              ? `\n\n${reminder.details.map((detail) => `${detail.title}:\n${detail.body}`).join("\n\n")}`
+              : ""}`,
             html: renderBookingEmailLayout({
               title: reminder.title,
               greeting: `Hello ${booking.name || "Guest"},`,
               message: `${reminder.message} Booking reference: ${item.id}.`,
               brandName: mail.brandName,
+              details: reminder.details,
             }),
           })
           await db.runTransaction(async (transaction) => {
             const current = await transaction.get(item.ref)
             if (!current.exists) throw new Error("BOOKING_NOT_FOUND")
             transaction.update(item.ref, {
-              ...(reminder.kind === "confirmation"
+              ...(kind === "confirmation"
                 ? { confirmationEmailSentAt: new Date() }
                 : {}),
-              [`reminderEmails.${reminder.kind}`]: {
+              [`reminderEmails.${kind}`]: {
                 status: "sent",
                 sentAt: new Date(),
               },
@@ -117,17 +113,17 @@ export async function GET(request) {
                 actorUid: "system:scheduled-reminders",
                 actorEmail: "",
                 actorRole: "system",
-                action: `booking.${reminder.kind}-email-sent`,
+                action: `booking.${kind}-email-sent`,
                 entityType: "booking",
                 entityId: item.id,
-                summary: `Scheduled ${reminder.kind} email was sent successfully.`,
+                summary: `Scheduled ${kind} email was sent successfully.`,
               })
             }
           })
-          sent.push({ bookingId: item.id, kind: reminder.kind })
+          sent.push({ bookingId: item.id, kind })
         } catch (error) {
-          console.error(`Failed to send ${reminder.kind} reminder for booking ${item.id}:`, error)
-          failures.push({ bookingId: item.id, kind: reminder.kind })
+          console.error(`Failed to send ${kind} reminder for booking ${item.id}:`, error)
+          failures.push({ bookingId: item.id, kind })
         }
       }
     }

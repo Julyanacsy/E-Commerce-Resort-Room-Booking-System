@@ -7,6 +7,7 @@ import { db } from "@/lib/firebase"
 
 export default function ReminderSettings({ ownerUid }) {
   const [instructions, setInstructions] = useState("")
+  const [rules, setRules] = useState("")
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -18,7 +19,9 @@ export default function ReminderSettings({ ownerUid }) {
     return onSnapshot(
       doc(db, "resortOwners", ownerUid),
       (snapshot) => {
-        setInstructions(String(snapshot.data()?.checkInInstructions || ""))
+        const settings = snapshot.data() || {}
+        setInstructions(String(settings.checkInInstructions || ""))
+        setRules(String(settings.resortRulesText || ""))
         setLoading(false)
       },
       (error) => {
@@ -35,9 +38,10 @@ export default function ReminderSettings({ ownerUid }) {
     try {
       await updateDoc(doc(db, "resortOwners", ownerUid), {
         checkInInstructions: instructions.trim(),
+        resortRulesText: rules.trim(),
         updatedAt: serverTimestamp(),
       })
-      toast.success("Check-in instructions saved.")
+      toast.success("Guest email settings saved.")
     } catch (error) {
       console.error("Failed to save reminder settings:", error)
       toast.error(error.message || "Check-in instructions could not be saved.")
@@ -50,9 +54,22 @@ export default function ReminderSettings({ ownerUid }) {
     <section className="max-w-3xl space-y-5">
       <header>
         <h1 className="text-3xl font-bold text-foreground">Email Reminders</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Confirmation emails are sent when a booking is approved. A daily scheduled email sends check-in instructions the day before arrival and a follow-up the day after checkout.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Booking confirmation emails include your resort rules. A daily scheduled email sends check-in and checkout reminders one day before each date.</p>
       </header>
       <div className="space-y-3 rounded-2xl border border-border bg-card p-5">
+        <label htmlFor="resort-rules" className="block text-sm font-semibold text-foreground">
+          Rules and regulations
+          <textarea
+            id="resort-rules"
+            rows={6}
+            maxLength={5000}
+            value={rules}
+            onChange={(event) => setRules(event.target.value)}
+            disabled={loading || saving}
+            className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+            placeholder="Add your resort's house rules, quiet hours, visitor policy, and safety requirements."
+          />
+        </label>
         <label htmlFor="check-in-instructions" className="block text-sm font-semibold text-foreground">Check-in instructions</label>
         <textarea
           id="check-in-instructions"

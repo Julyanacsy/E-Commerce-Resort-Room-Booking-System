@@ -63,17 +63,27 @@ export async function POST(request) {
     if (!message) return jsonFailure("No status email is available for this booking.", 400)
 
     if (!booking.email) return jsonFailure("This booking has no guest email address.", 409)
+    const resortRules =
+      type === "booking" && status === "Approved" && booking.ownerUid
+        ? String((await db.collection("resortOwners").doc(String(booking.ownerUid)).get()).get("resortRulesText") || "").trim()
+        : ""
+    const details = resortRules
+      ? [{ title: "Resort rules and regulations", body: resortRules }]
+      : []
     await mail.transporter.sendMail({
       from: `"${mail.brandName}" <${mail.user}>`,
       to: booking.email,
       replyTo: mail.replyTo,
       subject: type === "payment" ? `Payment update: ${paymentStatus}` : `Booking update: ${status}`,
-      text: `${message}\nBooking reference: ${bookingId}`,
+      text: `${message}\nBooking reference: ${bookingId}${details.length
+        ? `\n\n${details.map((detail) => `${detail.title}:\n${detail.body}`).join("\n\n")}`
+        : ""}`,
       html: renderBookingEmailLayout({
         title: type === "payment" ? `Payment ${paymentStatus}` : `Booking ${status.toLowerCase()}`,
         greeting: `Hello ${booking.name || "Guest"},`,
         message: `${message} Booking reference: ${bookingId}.`,
         brandName: mail.brandName,
+        details,
       }),
     })
     if (type === "booking" && status === "Approved") {
