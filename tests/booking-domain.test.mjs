@@ -14,6 +14,7 @@ import {
   normalizeDate,
   overlaps,
 } from "../lib/booking-domain.mjs"
+import { isRoomArchived } from "../lib/room-archive.mjs"
 
 test("date parsing and stay dates validate calendar dates and checkout-exclusive nights", () => {
   assert.equal(normalizeDate("2026-02-29"), null)
@@ -78,13 +79,24 @@ test("tenant ownership rules isolate bookings and handle legacy resort data", ()
   assert.equal(canManageBooking({ ownerUid: "resort-a" }, { ownerUid: "resort-b" }), false)
 })
 
+test("archived room markers hide the room while legacy rooms remain active", () => {
+  assert.equal(isRoomArchived({}), false)
+  assert.equal(isRoomArchived({ isArchived: false }), false)
+  assert.equal(isRoomArchived({ isArchived: true }), true)
+  assert.equal(isRoomArchived({ is_archived: true }), true)
+  assert.equal(isRoomArchived({ archivedAt: new Date() }), true)
+  assert.equal(isRoomArchived({ archived_at: "2026-01-01" }), true)
+})
+
 test("staff permissions remain scoped to assigned roles", () => {
   const frontDesk = { staffRole: "front-desk" }
   const finance = { staffRole: "finance" }
 
   assert.equal(hasBookingPermission(frontDesk, "booking"), true)
+  assert.equal(hasBookingPermission(frontDesk, "lost-found"), true)
   assert.equal(hasBookingPermission(frontDesk, "payment"), false)
   assert.equal(hasBookingPermission(finance, "payment"), true)
+  assert.equal(hasBookingPermission(finance, "lost-found"), false)
   assert.equal(hasBookingPermission(finance, "booking"), false)
   assert.equal(hasBookingPermission({ isOwner: true }, "staff"), true)
 })
