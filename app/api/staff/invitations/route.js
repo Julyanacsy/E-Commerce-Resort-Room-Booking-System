@@ -279,6 +279,9 @@ export async function POST(request) {
     if (!isPendingInvitation(invitation) && !isApprovedStaffInvitation(invitation)) {
       return jsonFailure("Only pending staff can be approved.", 409)
     }
+    if (!STAFF_ROLES.has(String(invitation.role || ""))) {
+      return jsonFailure("The staff record has an invalid role and cannot be approved.", 409)
+    }
 
     const staffUser = invitation.uid
       ? await adminAuth.getUser(String(invitation.uid))
@@ -293,8 +296,9 @@ export async function POST(request) {
       return jsonFailure("Staff access was not approved because email is not configured.", 503)
     }
 
+    const staffPortalUrl = `${getPublicBaseUrl()}/staff`
     const actionCodeSettings = {
-      url: `${getPublicBaseUrl()}/staff`,
+      url: staffPortalUrl,
       handleCodeInApp: false,
     }
     const [passwordSetupLink, verificationLink] = await Promise.all([
@@ -308,8 +312,8 @@ export async function POST(request) {
       to: email,
       replyTo: mail.replyTo,
       subject: "Your resort staff account is approved",
-      text: `${setupMessage}\n\nSet your password: ${passwordSetupLink}\n\nVerify your email: ${verificationLink}`,
-      html: `<p>${escapeHtml(setupMessage)}</p><p><a href="${escapeHtml(passwordSetupLink)}">Set your password</a></p><p><a href="${escapeHtml(verificationLink)}">Verify your email</a></p><p>After completing both steps, sign in at <a href="${escapeHtml(`${getPublicBaseUrl()}/admin`)}">the admin portal</a>.</p>`,
+      text: `${setupMessage}\n\nSet your password: ${passwordSetupLink}\n\nVerify your email: ${verificationLink}\n\nSign in at: ${staffPortalUrl}`,
+      html: `<p>${escapeHtml(setupMessage)}</p><p><a href="${escapeHtml(passwordSetupLink)}">Set your password</a></p><p><a href="${escapeHtml(verificationLink)}">Verify your email</a></p><p>After completing both steps, sign in at <a href="${escapeHtml(staffPortalUrl)}">the staff portal</a>.</p>`,
     })
 
     const notificationRef = db

@@ -54,7 +54,7 @@ import { BRANDING_DEFAULTS, useBranding } from "@/hooks/use-branding"
 import { useResortOwnerBranding } from "@/hooks/use-resort-owner-branding"
 import { useMarketplaceSettings } from "@/hooks/use-marketplace-settings"
 import { normalizeOwnerUidFromSearchParam } from "@/lib/booking-tenant"
-import { isKamayanResort, resolveKamayanGuestInfo } from "@/lib/kamayan-guest-info.mjs"
+import { resolveResortGuestInfo } from "@/lib/kamayan-guest-info.mjs"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { compressImageFileToDataUrl } from "@/lib/data-url-files"
 import {
@@ -101,6 +101,7 @@ import ManageInventory from "@/components/admin/pages/manage-inventory"
 import RoomItemMonitoring from "@/components/admin/pages/room-item-monitoring"
 import LostAndFound from "@/components/admin/pages/lost-and-found"
 import { resortAdminRequest } from "@/lib/admin-api-client"
+import { canAccessStaffPage } from "@/lib/staff-page-access.mjs"
 const ALLOWED_ADMINS = ["admin@luxestay.com"]
 
 const NAV_ITEMS = [
@@ -205,25 +206,23 @@ export default function AdminPage({ portalMode }) {
     ? adminUser.tenantOwnerUid || adminUser.uid
     : null
   const staffRole = adminUser?.staffRole || "owner"
-  const staffNavKeys = {
-    admin: ["manage-bookings", "manage-inventory", "room-item-monitoring", "lost-and-found", "booking-calendar", "booking-history", "payment-integration"],
-    "front-desk": ["manage-bookings", "room-item-monitoring", "lost-and-found", "booking-calendar", "payment-integration"],
-    finance: ["booking-history", "payment-integration"],
-  }
-  const visibleNavItems = (isLegacyHelpdesk
-    ? NAV_ITEMS.filter((item) => !["audit-log", "manage-inventory", "room-item-monitoring"].includes(item.key))
-    : NAV_ITEMS)
-    .filter((item) => isLegacyHelpdesk || staffRole === "owner" || staffNavKeys[staffRole]?.includes(item.key))
+  const visibleNavItems = NAV_ITEMS.filter((item) =>
+    canAccessStaffPage(staffRole, item.key, { isLegacyHelpdesk }),
+  )
   const visibleSettingsItems = visibleNavItems.filter((item) => SETTINGS_NAV_KEYS.has(item.key))
   const visiblePrimaryNavItems = visibleNavItems.filter((item) => !SETTINGS_NAV_KEYS.has(item.key))
-  const isSettingsPageActive = visibleSettingsItems.some((item) => item.key === currentPage)
-  const showSettingsNavigation = settingsExpanded && (mobileSidebarVisible || sidebarExpanded)
   const defaultPage = staffRole === "owner" || isLegacyHelpdesk
     ? "dashboard"
     : staffRole === "finance"
       ? "payment-integration"
       : "manage-bookings"
+  const activePage = canAccessStaffPage(staffRole, currentPage, { isLegacyHelpdesk })
+    ? currentPage
+    : defaultPage
+  const isSettingsPageActive = visibleSettingsItems.some((item) => item.key === activePage)
+  const showSettingsNavigation = settingsExpanded && (mobileSidebarVisible || sidebarExpanded)
   const navigateToPage = (page) => {
+    if (!canAccessStaffPage(staffRole, page, { isLegacyHelpdesk })) return
     if (SETTINGS_NAV_KEYS.has(page)) setSettingsExpanded(true)
     setCurrentPage(page)
   }
@@ -282,7 +281,7 @@ export default function AdminPage({ portalMode }) {
       const next = ownerBrandingSnapshot ?? BRANDING_DEFAULTS
       // Only replace when snapshot exists; otherwise keep whatever user is editing locally.
       if (!ownerBrandingSnapshot) return prev
-      return { ...prev, ...next, ...resolveKamayanGuestInfo(next) }
+      return { ...prev, ...next, ...resolveResortGuestInfo(next) }
     })
   }, [tenantOwnerUid, isLegacyHelpdesk, ownerBrandingSnapshot])
 
@@ -1364,7 +1363,7 @@ export default function AdminPage({ portalMode }) {
               : "overflow-hidden lg:overflow-hidden"
           }`}>
             {visiblePrimaryNavItems.map(({ key, label, icon: Icon }) => {
-              const isActive = currentPage === key
+              const isActive = activePage === key
               return (
                 <button
                   key={key}
@@ -1454,7 +1453,7 @@ export default function AdminPage({ portalMode }) {
                   className="mt-1 space-y-1 border-l border-white/20 pl-3 ml-5"
                 >
                   {visibleSettingsItems.map(({ key, label, icon: Icon }) => {
-                    const isActive = currentPage === key
+                    const isActive = activePage === key
                     return (
                       <button
                         key={key}
@@ -1603,7 +1602,7 @@ export default function AdminPage({ portalMode }) {
                 </div>
         </div>
       </div>
-          {currentPage !== defaultPage && (
+          {activePage !== defaultPage && (
             <div className="mb-4">
               <button
                 type="button"
@@ -1616,7 +1615,7 @@ export default function AdminPage({ portalMode }) {
               </button>
             </div>
           )}
-          {currentPage === "dashboard" && (
+          {activePage === "dashboard" && (
             <AdminOverview
               isLegacyHelpdesk={isLegacyHelpdesk}
               ownerUid={tenantOwnerUid}
@@ -1628,21 +1627,21 @@ export default function AdminPage({ portalMode }) {
             />
           )}
 
-          {currentPage === "manage-inventory" && (staffRole === "owner" || staffRole === "admin") && (
+          {activePage === "manage-inventory" && (staffRole === "owner" || staffRole === "admin") && (
             <ManageInventory />
           )}
-          {currentPage === "room-item-monitoring"
+          {activePage === "room-item-monitoring"
             && !isLegacyHelpdesk
             && ["owner", "admin", "front-desk"].includes(staffRole)
             && (
               <RoomItemMonitoring canManageItems={staffRole === "owner" || staffRole === "admin"} />
             )}
-          {currentPage === "lost-and-found"
+          {activePage === "lost-and-found"
             && !isLegacyHelpdesk
             && ["owner", "admin", "front-desk"].includes(staffRole)
             && <LostAndFound />}
 
-          {currentPage === "manage-rooms" && (
+          {activePage === "manage-rooms" && (
             <ManageRooms
               rooms={rooms}
               loading={roomsLoading}
@@ -1661,7 +1660,7 @@ export default function AdminPage({ portalMode }) {
             />
           )}
 
-          {currentPage === "manage-bookings" && (
+          {activePage === "manage-bookings" && (
             <ManageBookings
               isLegacyHelpdesk={isLegacyHelpdesk}
               ownerUid={tenantOwnerUid}
@@ -1675,7 +1674,7 @@ export default function AdminPage({ portalMode }) {
             />
           )}
 
-          {currentPage === "booking-history" && (
+          {activePage === "booking-history" && (
             <BookingHistory
               isLegacyHelpdesk={isLegacyHelpdesk}
               ownerUid={tenantOwnerUid}
@@ -1689,22 +1688,22 @@ export default function AdminPage({ portalMode }) {
             />
           )}
 
-          {currentPage === "booking-calendar" && <BookingCalendar />}
-          {currentPage === "reminder-settings" && staffRole === "owner" && (
+          {activePage === "booking-calendar" && <BookingCalendar />}
+          {activePage === "reminder-settings" && staffRole === "owner" && (
             <ReminderSettings ownerUid={tenantOwnerUid} />
           )}
-          {currentPage === "audit-log" && staffRole === "owner" && !isLegacyHelpdesk && <AuditLog />}
+          {activePage === "audit-log" && staffRole === "owner" && !isLegacyHelpdesk && <AuditLog />}
 
-          {currentPage === "contact-messages" && (
+          {activePage === "contact-messages" && (
             <ManageContact isLegacyHelpdesk={isLegacyHelpdesk} ownerUid={tenantOwnerUid} />
           )}
 
-          {currentPage === "manage-feedback" && (
+          {activePage === "manage-feedback" && (
             <ManageFeedback isLegacyHelpdesk={isLegacyHelpdesk} ownerUid={tenantOwnerUid} />
           )}
 
 
-          {currentPage === "brand-settings" && (
+          {activePage === "brand-settings" && (
             <div>
               <h1 className="text-3xl font-bold text-foreground mb-8">Brand Settings</h1>
               <div className="grid gap-8 lg:grid-cols-2">
@@ -1957,12 +1956,12 @@ export default function AdminPage({ portalMode }) {
                     </div>
                   </div>
 
-                  {!isLegacyHelpdesk && tenantOwnerUid && isKamayanResort(brandForm.name) && (
+                  {!isLegacyHelpdesk && tenantOwnerUid && (
                     <div className="space-y-4 border-t border-border pt-4">
                       <div>
                         <h2 className="text-xl font-semibold text-foreground">Guest announcement, rates &amp; resort info</h2>
                         <p className="mt-1 text-sm text-muted-foreground">
-                          These editable details appear on your public resort page and in guest confirmation/check-in emails. Entrance and cottage rates are informational and are not added to room booking totals.
+                          These editable details appear on your public resort page and in guest confirmation/check-in emails. Add only details that apply to your resort. Rates and fees are informational and are not added to room booking totals.
                         </p>
                       </div>
                       <label className="block text-sm font-semibold text-foreground">
@@ -1986,7 +1985,7 @@ export default function AdminPage({ portalMode }) {
                         />
                       </label>
                       <label className="block text-sm font-semibold text-foreground">
-                        Entrance fees and cottage rates
+                        On-site rates, fees, and other charges
                         <textarea
                           rows={8}
                           maxLength={3000}
@@ -2306,7 +2305,7 @@ export default function AdminPage({ portalMode }) {
             </div>
           )}
 
-          {currentPage === "payment-integration" && (
+          {activePage === "payment-integration" && (
             <PaymentSettings
               tenantOwnerUid={tenantOwnerUid}
               isLegacyHelpdesk={isLegacyHelpdesk}
@@ -2314,7 +2313,7 @@ export default function AdminPage({ portalMode }) {
             />
           )}
 
-          {currentPage === "staff-management" && staffRole === "owner" && <StaffManagement />}
+          {activePage === "staff-management" && staffRole === "owner" && <StaffManagement />}
         </div>
       </main>
     </div>
