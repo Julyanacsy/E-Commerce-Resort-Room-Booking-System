@@ -23,7 +23,7 @@ import { BRANDING_DEFAULTS, useBranding } from "@/hooks/use-branding"
 import { normalizeOwnerUidFromSearchParam } from "@/lib/booking-tenant"
 import { isRoomArchived } from "@/lib/room-archive.mjs"
 import { getDestinationHighlightTitle } from "@/lib/resort-highlights.mjs"
-import { isKamayanResort, resolveKamayanGuestInfo } from "@/lib/kamayan-guest-info.mjs"
+import { resolveResortGuestInfo } from "@/lib/kamayan-guest-info.mjs"
 import { calculateReservationDeposit, DEFAULT_RESERVATION_DEPOSIT_PERCENT } from "@/lib/payment-domain.mjs"
 import { useMarketplaceSettings } from "@/hooks/use-marketplace-settings"
 import { useResortOwnerBranding } from "@/hooks/use-resort-owner-branding"
@@ -309,7 +309,13 @@ export default function Home() {
     : ownerBrandingLoading
       ? globalBranding
       : (ownerBrandingSnapshot ?? globalBranding)
-  const guestInfo = resolveKamayanGuestInfo(branding)
+  const guestInfo = resolveResortGuestInfo(branding)
+  const hasResortGuestInfo = [
+    guestInfo.guestAnnouncementText,
+    guestInfo.guestRatesText,
+    guestInfo.guestContactText,
+    guestInfo.guestAmenitiesText,
+  ].some((value) => value.trim())
   const destinationHighlights =
     bookingOwnerUid && Array.isArray(branding.destinationHighlights)
       ? branding.destinationHighlights.filter(
@@ -382,7 +388,7 @@ export default function Home() {
   }, [resortMarketplace.mapsUrl, bookingOwnerUid])
 
   const navLinks = bookingOwnerUid
-    ? ["Home", ...(destinationHighlights.length ? ["Highlights"] : []), ...(isKamayanResort(branding.name) ? ["Resort Info"] : []), "Rooms", "Guest Wi-Fi", "Lost and Found", "Booking", "About", "Contact"]
+    ? ["Home", ...(destinationHighlights.length ? ["Highlights"] : []), ...(hasResortGuestInfo ? ["Resort Info"] : []), "Rooms", "Guest Wi-Fi", "Lost and Found", "Booking", "About", "Contact"]
     : ["Home", "Rooms", "Booking", "About", "Contact"]
   /** Marketplace listing has something to show above contact (map link and/or area label) */
   const hasResortListingHint =
@@ -1298,12 +1304,7 @@ export default function Home() {
         </div>
       </section>
 
-      {bookingOwnerUid && (
-        guestInfo.guestAnnouncementText ||
-        guestInfo.guestRatesText ||
-        guestInfo.guestContactText ||
-        guestInfo.guestAmenitiesText
-      ) && (
+      {bookingOwnerUid && hasResortGuestInfo && (
         <section
           id="resort-info"
           aria-labelledby="guest-announcement-heading"
@@ -1322,7 +1323,7 @@ export default function Home() {
             <div className="mt-5 grid gap-5 border-t border-amber-100 pt-5 md:grid-cols-3">
               {guestInfo.guestRatesText && (
                 <div>
-                  <h3 className="font-semibold text-emerald-900">Entrance fees &amp; cottage rates</h3>
+                  <h3 className="font-semibold text-emerald-900">On-site rates &amp; fees</h3>
                   <p className="mt-2 whitespace-pre-line text-sm leading-6 text-slate-700">{guestInfo.guestRatesText}</p>
                 </div>
               )}
@@ -2350,10 +2351,10 @@ export default function Home() {
                         ) : null}
                         {guestInfo.guestRatesText ? (
                           <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-950">
-                            <p className="font-semibold">Entrance fees &amp; cottage rates</p>
+                            <p className="font-semibold">On-site rates &amp; fees</p>
                             <p className="mt-2 whitespace-pre-line text-xs leading-5">{guestInfo.guestRatesText}</p>
                             <p className="mt-2 border-t border-amber-200 pt-2 text-[11px]">
-                              These are separate on-site rates and are not included in the room reservation total above.
+                              These are separate on-site rates and fees; they are not included in the room reservation total above.
                             </p>
                           </div>
                         ) : null}

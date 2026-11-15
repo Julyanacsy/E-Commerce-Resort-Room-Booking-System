@@ -5,7 +5,7 @@ import { doc, onSnapshot } from "firebase/firestore"
 import { toast } from "sonner"
 import { db } from "@/lib/firebase"
 import { resortAdminRequest } from "@/lib/admin-api-client"
-import { resolveKamayanGuestInfo } from "@/lib/kamayan-guest-info.mjs"
+import { resolveResortGuestInfo } from "@/lib/kamayan-guest-info.mjs"
 
 export default function ReminderSettings({ ownerUid }) {
   const [instructions, setInstructions] = useState("")
@@ -28,7 +28,7 @@ export default function ReminderSettings({ ownerUid }) {
     let brandingLoaded = false
     const syncSettings = () => {
       if (!ownerLoaded || !brandingLoaded) return
-      const guestInfo = resolveKamayanGuestInfo(branding)
+      const guestInfo = resolveResortGuestInfo(branding)
       setInstructions(String(
         "checkInInstructions" in ownerSettings
           ? ownerSettings.checkInInstructions || ""
@@ -108,7 +108,7 @@ export default function ReminderSettings({ ownerUid }) {
         <h1 className="text-3xl font-bold text-foreground">Guest Information &amp; Reminders</h1>
         <p className="mt-1 text-sm text-muted-foreground">Guests receive your resort rules when their booking is confirmed. The daily scheduled job sends reminders one day before check-in and checkout, then a one-time feedback link after verified checkout.</p>
         <p className="mt-2 text-sm text-muted-foreground">
-          Kamayan announcement, entrance/cottage rates, contacts, and amenities are included in guest confirmation and check-in emails. Edit those details in Brand Settings.
+          Your resort's saved announcement, rates and fees, contacts, and amenities are included in guest confirmation and check-in emails. Edit those details in Brand Settings; leave any fields blank if they do not apply.
         </p>
       </header>
       <div className="space-y-3 rounded-2xl border border-border bg-card p-5">

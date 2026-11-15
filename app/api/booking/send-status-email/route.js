@@ -9,7 +9,7 @@ import {
 import { renderBookingEmailLayout } from "@/lib/booking-email-layout"
 import { getOutstandingPaymentBalance, getRecordedPaymentAmount } from "@/lib/payment-domain.mjs"
 import { writeResortAdminAudit } from "@/lib/resort-admin-events.mjs"
-import { resolveKamayanGuestInfo } from "@/lib/kamayan-guest-info.mjs"
+import { resolveResortGuestInfo } from "@/lib/kamayan-guest-info.mjs"
 
 export async function POST(request) {
   const authResult = await authenticateBookingAdmin(request)
@@ -77,7 +77,7 @@ export async function POST(request) {
       ])
       const ownerData = ownerSnapshot.exists ? ownerSnapshot.data() : {}
       const branding = brandingSnapshot.exists ? brandingSnapshot.data() : {}
-      const guestInfo = resolveKamayanGuestInfo({
+      const guestInfo = resolveResortGuestInfo({
         ...ownerData,
         ...branding,
         name: branding.name || ownerData.name || booking.resortName || booking.hotelName || "",
@@ -91,7 +91,7 @@ export async function POST(request) {
       emailDetails.push(
         ...[
           { title: guestInfo.guestAnnouncementTitle, body: guestInfo.guestAnnouncementText },
-          { title: "Entrance fees and cottage rates", body: guestInfo.guestRatesText },
+          { title: "On-site rates and fees", body: guestInfo.guestRatesText },
           { title: "Resort contacts", body: guestInfo.guestContactText },
           { title: "Amenities", body: guestInfo.guestAmenitiesText },
         ].filter((detail) => detail.body),

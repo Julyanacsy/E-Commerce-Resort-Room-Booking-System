@@ -4,7 +4,7 @@ import { getBookingDb, getManilaDate, jsonFailure } from "@/lib/booking-api-serv
 import { writeResortAdminAudit } from "@/lib/resort-admin-events.mjs"
 import { getDueBookingReminderKinds } from "@/lib/booking-reminder-domain.mjs"
 import { getPublicAppUrl, issueBookingFeedbackToken } from "@/lib/booking-feedback-server"
-import { resolveKamayanGuestInfo } from "@/lib/kamayan-guest-info.mjs"
+import { resolveResortGuestInfo } from "@/lib/kamayan-guest-info.mjs"
 
 export async function GET(request) {
   const secret = String(process.env.CRON_SECRET || "").trim()
@@ -50,12 +50,12 @@ export async function GET(request) {
         })
       }
       ownerData = ownerUid ? ownerSettings.get(ownerUid) || {} : {}
-      const guestInfo = resolveKamayanGuestInfo(ownerData)
+      const guestInfo = resolveResortGuestInfo(ownerData)
       const instructions = String(ownerData.checkInInstructions || guestInfo.checkInInstructions || "").trim()
       const rules = String(ownerData.resortRulesText || guestInfo.resortRulesText || "").trim()
       const guestDetails = [
         { title: guestInfo.guestAnnouncementTitle, body: guestInfo.guestAnnouncementText },
-        { title: "Entrance fees and cottage rates", body: guestInfo.guestRatesText },
+        { title: "On-site rates and fees", body: guestInfo.guestRatesText },
         { title: "Resort contacts", body: guestInfo.guestContactText },
         { title: "Amenities", body: guestInfo.guestAmenitiesText },
       ].filter((detail) => detail.body)
