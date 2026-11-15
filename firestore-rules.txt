@@ -191,20 +191,6 @@ service cloud.firestore {
       allow create: if isSuperAdminEmail();
       allow update, delete: if false;
     }
-    match /superAdminNotifications/{notificationId} {
-      function isSuperAdminEmail() {
-        return request.auth != null
-          && request.auth.token.email != null
-          && request.auth.token.email_verified == true
-          && (request.auth.token.email == "ecommerceresortadmin@gmail.com"
-              || request.auth.token.email == "commerceresortadmin@gmail.com");
-      }
-      allow read: if isSuperAdminEmail();
-      allow create: if isSuperAdminEmail();
-      allow update: if isSuperAdminEmail()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["read", "readAt"]);
-      allow delete: if false;
-    }
 
     match /superAdminNotifications/{notificationId} {
       function isVerifiedSuperAdminEmail() {

@@ -46,9 +46,21 @@ const BRANDING_FIELDS = [
   "facebook",
   "twitter",
   "linkedin",
+  "guestAnnouncementTitle",
+  "guestAnnouncementText",
+  "guestRatesText",
+  "guestContactText",
+  "guestAmenitiesText",
 ]
 const MAX_IMAGE_CHARS = 350_000
 const MAX_BRANDING_STRING_CHARS = 520_000
+const GUEST_INFO_STRING_LIMITS = {
+  guestAnnouncementTitle: 120,
+  guestAnnouncementText: 1200,
+  guestRatesText: 3000,
+  guestContactText: 1200,
+  guestAmenitiesText: 1500,
+}
 
 function canManageRoom(user, room, legacyUid) {
   if (user.isLegacyAdmin && !room.ownerUid) return true
@@ -328,6 +340,10 @@ export async function POST(request) {
       const stringFieldsValid = Object.entries(branding)
         .filter(([key]) => !["heroOverlayOpacity", "aboutHighlights", "destinationHighlights"].includes(key))
         .every(([, value]) => typeof value === "string" && value.length <= MAX_BRANDING_STRING_CHARS)
+      const guestInfoValid = Object.entries(GUEST_INFO_STRING_LIMITS)
+        .every(([field, maxLength]) =>
+          !(field in branding) || validString(branding[field], maxLength),
+        )
       const highlightsValid = !("aboutHighlights" in branding) || (
         Array.isArray(branding.aboutHighlights)
         && branding.aboutHighlights.length <= 3
@@ -351,6 +367,7 @@ export async function POST(request) {
         !isPlainObject(body.branding)
         || !Object.keys(branding).length
         || !stringFieldsValid
+        || !guestInfoValid
         || !highlightsValid
         || !destinationHighlightsValid
         || !overlayValid

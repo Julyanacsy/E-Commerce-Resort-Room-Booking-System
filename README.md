@@ -134,7 +134,6 @@ On Windows checkouts under OneDrive, `.\scripts\docker-up.ps1` prepares a tempor
 8. Admin receives email notification; the remaining balance is recorded by staff during check-in
 
 The booking total and reservation deposit are calculated and validated by the server from the selected room rate, stay dates, and resort's configured deposit percentage. The guest must acknowledge that cancellation and refund terms are set by the resort and should be confirmed directly before payment. Availability is checked again inside a Firestore transaction; per-night lock documents prevent simultaneous requests from reserving the same room type and dates.
-
 Resorts can set the reservation deposit percentage. Guests pay that deposit to reserve, and the remaining verified balance is collected at check-in.
 
 ### Admin Dashboard
@@ -147,11 +146,11 @@ Resorts can set the reservation deposit percentage. Guests pay that deposit to r
 - **Contact Messages**: View and manage contact inquiries
 - **Feedback**: Issue a private one-time feedback link after verified checkout; review results with the booking reference and stay dates, then publish or hide each response
 - **Guest Wi-Fi**: Email the guest a landing-page link after check-in; the Wi-Fi modal reveals network details only after the guest verifies the booking reference and matching email for an active checked-in stay
-- **Brand Settings**: Customize branding and contact info
+- **Brand Settings**: Customize branding, announcements, resort-specific informational rates and fees, contacts, and amenities. Rates and fees are not added to room-booking totals.
 - **Payments**: Set the reservation deposit percentage, review deposits and check-in balances, download booking invoices, export an Excel-compatible payment report, and review payment history
 - **Booking Calendar**: View room availability by day and see occupied room types
 - **Check-in / Check-out**: Record arrival and departure with timestamps
-- **Email Reminders**: Booking confirmation emails include resort rules and check-in instructions; scheduled check-in and checkout reminders are sent one day before each date, followed by a one-time feedback link after verified checkout
+- **Email Reminders**: Booking emails include each resort's rules, check-in instructions, announcements, rates/fees, contacts, and amenities; scheduled check-in and checkout reminders are sent one day before each date, followed by a one-time feedback link after verified checkout
 - **Cancellations / Refunds**: Record cancellation reasons and manually track refund amounts, dates, and statuses
 - **Staff Accounts**: Convert existing accounts or create new staff accounts with Admin, Front desk, or Finance permissions; approve pending accounts and revoke access
 - **Admin Notifications**: Resort-admin bell with unread counts and read controls for new bookings, cancellations, pending staff approvals, and received payments
@@ -195,7 +194,6 @@ Room documents are stored in the Firestore `rooms` collection. Each room uses th
 | `archivedAt` | Firestore timestamp | When the room was archived; removed when restored |
 
 Owner accounts manage rooms whose `ownerUid` matches their Firebase Auth UID. New rooms are always saved with the signed-in UID. Internal helpdesk accounts may manage their own rooms and claim legacy room documents without an `ownerUid`; the claim assigns the helpdesk user's UID. Room archive and restore actions are audited server mutations; archived rooms are hidden from public listings, marketplace counts, calendar room choices, and new booking or walk-in forms. Existing bookings and their history are retained. The admin room manager shows active rooms by default and supports Archived and All filters.
-
 The room manager supports search, availability filtering, and archive/restore. Room changes are authenticated and audited by the server API. Room item templates and stay inspections are stored under `resortOwners/{ownerUid}/roomInventoryItems` and `resortOwners/{ownerUid}/roomInspections`. Owners and Admin staff manage room supply/appliance templates; Admin and Front desk staff can record pre-check-in and post-checkout quantities and conditions. Checkout findings identify refill, damaged, and missing items and can be marked resolved. These collections are accessed through the authenticated server API; no index deployment is needed.
 
 The public resort site is available at `/?o=<ownerUid>` and the shorter `/stay/<ownerUid>` URL redirects to it. Both render the same owner-scoped rooms and booking experience. Configure `settings/marketplace.legacyUnscopedRoomsOwnerUid` (or `NEXT_PUBLIC_LEGACY_UNSCOPED_ROOMS_OWNER_UID`) to group older unscoped rooms with the intended legacy resort.

@@ -182,7 +182,15 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
   }, [paymentSearch, statusFilteredBookings])
 
   const historyRecords = useMemo(() => {
-    const records = [...paymentEvents]
+    const bookingsById = new Map(bookings.map((booking) => [booking.id, booking]))
+    const records = paymentEvents.map((event) => {
+      const booking = bookingsById.get(event.bookingId)
+      return {
+        ...event,
+        guestName: booking?.name || event.guestName || "Guest",
+        guestEmail: booking?.email || event.guestEmail || "",
+      }
+    })
     for (const booking of bookings) {
       const status = booking.paymentStatus || "unpaid"
       if (
@@ -196,6 +204,7 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
         id: `legacy-${booking.id}-${status}`,
         bookingId: booking.id,
         guestName: booking.name || "Guest",
+        guestEmail: booking.email || "",
         roomType: booking.roomType || "Room",
         checkIn: booking.checkIn || "",
         checkOut: booking.checkOut || "",
@@ -223,6 +232,7 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
           (historyStatus === "all" || record.paymentStatus === historyStatus) &&
           (!term || [
             record.guestName,
+            record.guestEmail,
             record.roomType,
             record.bookingId,
             record.action,
@@ -365,10 +375,11 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
       return
     }
     const rows = [
-      ["Date", "Guest", "Booking reference", "Room", "Check-in", "Check-out", "Action", "Payment status", "Method", "Amount"],
+      ["Date", "Guest name", "Guest email", "Booking reference", "Room", "Check-in", "Check-out", "Action", "Payment status", "Method", "Amount"],
       ...filteredHistoryRecords.map((record) => [
         formatDate(record.createdAt),
         record.guestName,
+        record.guestEmail,
         record.bookingId,
         record.roomType,
         record.checkIn,
@@ -1060,6 +1071,13 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
                         <div className="text-[#66736a]">{formatDate(record.createdAt)}</div>
                         <div>
                           <p className="font-semibold text-[#18271e]">{record.guestName || "Guest"}</p>
+                          {record.guestEmail ? (
+                            <a className="block break-all text-xs text-[#526257] underline underline-offset-2" href={`mailto:${record.guestEmail}`}>
+                              {record.guestEmail}
+                            </a>
+                          ) : (
+                            <p className="text-xs text-[#7b817a]">No email on file</p>
+                          )}
                           <p className="text-xs text-[#7b817a]">{record.bookingId}</p>
                         </div>
                         <div>

@@ -23,6 +23,7 @@ import { BRANDING_DEFAULTS, useBranding } from "@/hooks/use-branding"
 import { normalizeOwnerUidFromSearchParam } from "@/lib/booking-tenant"
 import { isRoomArchived } from "@/lib/room-archive.mjs"
 import { getDestinationHighlightTitle } from "@/lib/resort-highlights.mjs"
+import { resolveResortGuestInfo } from "@/lib/kamayan-guest-info.mjs"
 import { calculateReservationDeposit, DEFAULT_RESERVATION_DEPOSIT_PERCENT } from "@/lib/payment-domain.mjs"
 import { useMarketplaceSettings } from "@/hooks/use-marketplace-settings"
 import { useResortOwnerBranding } from "@/hooks/use-resort-owner-branding"
@@ -308,6 +309,13 @@ export default function Home() {
     : ownerBrandingLoading
       ? globalBranding
       : (ownerBrandingSnapshot ?? globalBranding)
+  const guestInfo = resolveResortGuestInfo(branding)
+  const hasResortGuestInfo = [
+    guestInfo.guestAnnouncementText,
+    guestInfo.guestRatesText,
+    guestInfo.guestContactText,
+    guestInfo.guestAmenitiesText,
+  ].some((value) => value.trim())
   const destinationHighlights =
     bookingOwnerUid && Array.isArray(branding.destinationHighlights)
       ? branding.destinationHighlights.filter(
@@ -380,7 +388,7 @@ export default function Home() {
   }, [resortMarketplace.mapsUrl, bookingOwnerUid])
 
   const navLinks = bookingOwnerUid
-    ? ["Home", ...(destinationHighlights.length ? ["Highlights"] : []), "Rooms", "Lost and Found", "Booking", "About", "Contact"]
+    ? ["Home", ...(destinationHighlights.length ? ["Highlights"] : []), ...(hasResortGuestInfo ? ["Resort Info"] : []), "Rooms", "Lost and Found", "Booking", "About", "Contact"]
     : ["Home", "Rooms", "Booking", "About", "Contact"]
   /** Marketplace listing has something to show above contact (map link and/or area label) */
   const hasResortListingHint =
@@ -1296,6 +1304,45 @@ export default function Home() {
         </div>
       </section>
 
+      {bookingOwnerUid && hasResortGuestInfo && (
+        <section
+          id="resort-info"
+          aria-labelledby="guest-announcement-heading"
+          className="bg-amber-50 px-4 py-8 sm:px-6 lg:px-8"
+        >
+          <div className="mx-auto max-w-6xl rounded-2xl border border-amber-200 bg-white p-5 shadow-sm sm:p-7">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-amber-800">Plan your visit</p>
+            <h2 id="guest-announcement-heading" className="mt-2 text-2xl font-bold text-emerald-950">
+              {guestInfo.guestAnnouncementTitle || "Resort information"}
+            </h2>
+            {guestInfo.guestAnnouncementText && (
+              <p className="mt-3 whitespace-pre-line text-sm leading-6 text-slate-700">
+                {guestInfo.guestAnnouncementText}
+              </p>
+            )}
+            <div className="mt-5 grid gap-5 border-t border-amber-100 pt-5 md:grid-cols-3">
+              {guestInfo.guestRatesText && (
+                <div>
+                  <h3 className="font-semibold text-emerald-900">On-site rates &amp; fees</h3>
+                  <p className="mt-2 whitespace-pre-line text-sm leading-6 text-slate-700">{guestInfo.guestRatesText}</p>
+                </div>
+              )}
+              {guestInfo.guestContactText && (
+                <div>
+                  <h3 className="font-semibold text-emerald-900">Resort contacts</h3>
+                  <p className="mt-2 whitespace-pre-line text-sm leading-6 text-slate-700">{guestInfo.guestContactText}</p>
+                </div>
+              )}
+              {guestInfo.guestAmenitiesText && (
+                <div>
+                  <h3 className="font-semibold text-emerald-900">Amenities &amp; features</h3>
+                  <p className="mt-2 whitespace-pre-line text-sm leading-6 text-slate-700">{guestInfo.guestAmenitiesText}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
       {destinationHighlights.length > 0 && (
         <section id="highlights" className={`px-4 py-14 sm:px-6 md:py-18 lg:px-8 ${theme === "dark" ? "bg-slate-950" : "bg-emerald-50/70"}`}>
           <div className="mx-auto max-w-7xl">
@@ -2301,6 +2348,15 @@ export default function Home() {
                         </p>
                         {paymentInstructions ? (
                           <p className="mt-2 text-xs text-emerald-900/80">{paymentInstructions}</p>
+                        ) : null}
+                        {guestInfo.guestRatesText ? (
+                          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-950">
+                            <p className="font-semibold">On-site rates &amp; fees</p>
+                            <p className="mt-2 whitespace-pre-line text-xs leading-5">{guestInfo.guestRatesText}</p>
+                            <p className="mt-2 border-t border-amber-200 pt-2 text-[11px]">
+                              These are separate on-site rates and fees; they are not included in the room reservation total above.
+                            </p>
+                          </div>
                         ) : null}
                       </div>
                     </div>

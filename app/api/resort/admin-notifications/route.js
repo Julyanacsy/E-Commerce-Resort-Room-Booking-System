@@ -24,13 +24,25 @@ export async function GET(request) {
       .collection("adminNotifications")
     const isOwner = authResult.user.isOwner
     const role = String(authResult.user.staffRole || "")
-    const query = isOwner
-      ? notificationsRef.orderBy("createdAt", "desc")
-      : notificationsRef
-        .where("audienceRoles", "array-contains", role)
+    const notificationDocs = []
+    let cursor = null
+    let hasMore = true
+    while (hasMore && notificationDocs.length < MAX_NOTIFICATION_PAGE_SIZE) {
+      let pageQuery = notificationsRef
         .orderBy("createdAt", "desc")
-    const snapshot = await query.limit(MAX_NOTIFICATION_PAGE_SIZE).get()
-    const notifications = snapshot.docs.map((item) => {
+        .limit(MAX_NOTIFICATION_PAGE_SIZE)
+      if (cursor) pageQuery = pageQuery.startAfter(cursor)
+      const page = await pageQuery.get()
+      notificationDocs.push(...(isOwner
+        ? page.docs
+        : page.docs.filter((item) => (
+          Array.isArray(item.get("audienceRoles"))
+          && item.get("audienceRoles").includes(role)
+        ))))
+      cursor = page.docs.at(-1) || null
+      hasMore = page.size === MAX_NOTIFICATION_PAGE_SIZE && Boolean(cursor)
+    }
+    const notifications = notificationDocs.slice(0, MAX_NOTIFICATION_PAGE_SIZE).map((item) => {
       const readBy = item.get("readBy") || []
       const read = isOwner ? item.get("read") === true : readBy.includes(authResult.user.uid)
       return {
@@ -126,18 +138,18 @@ export async function PATCH(request) {
     } else {
       let cursor = null
       do {
-        let candidatesQuery = isOwner
-          ? notificationsRef.orderBy("createdAt", "desc")
-          : notificationsRef
-            .where("audienceRoles", "array-contains", role)
-            .orderBy("createdAt", "desc")
+        let candidatesQuery = notificationsRef.orderBy("createdAt", "desc")
         if (cursor) candidatesQuery = candidatesQuery.startAfter(cursor)
         const candidates = await candidatesQuery.limit(MARK_ALL_BATCH_SIZE).get()
         cursor = candidates.docs.at(-1) || null
         const unread = candidates.docs.filter((notification) => (
-          isOwner
+          (isOwner || (
+            Array.isArray(notification.get("audienceRoles"))
+            && notification.get("audienceRoles").includes(role)
+          ))
+          && (isOwner
             ? notification.get("read") !== true
-            : !(notification.get("readBy") || []).includes(authResult.user.uid)
+            : !(notification.get("readBy") || []).includes(authResult.user.uid))
         ))
         if (unread.length) {
           const batch = db.batch()

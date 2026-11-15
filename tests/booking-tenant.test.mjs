@@ -16,17 +16,18 @@ test("template owner IDs are never accepted as resort booking IDs", () => {
 
   assert.equal(normalizeOwnerUidFromSearchParam("realFirebaseOwnerId123"), "realFirebaseOwnerId123")
 })
-
 test("Kamayan helpdesk identification is normalized and exact", () => {
   assert.equal(isKamayanHelpdeskEmail("resort.helpdesk01@gmail.com"), true)
   assert.equal(isKamayanHelpdeskEmail("  RESORT.HELPDESK01@gmail.com "), true)
   assert.equal(isKamayanHelpdeskEmail("another@example.com"), false)
 })
 
-test("legacy unowned rooms and bookings are scoped only to their configured owner", () => {
+test("legacy unowned rooms and bookings are included only for the explicitly configured owner", () => {
   const ownerUid = "kamayan-owner"
   assert.equal(roomBelongsToTenant({}, ownerUid, ownerUid), true)
   assert.equal(roomBelongsToTenant({ ownerUid: "another-owner" }, ownerUid, ownerUid), false)
+  assert.equal(roomBelongsToTenant({}, ownerUid, null), false)
   assert.equal(bookingBelongsToTenant({}, ownerUid, ownerUid), true)
   assert.equal(bookingBelongsToTenant({ ownerUid: "another-owner" }, ownerUid, ownerUid), false)
+  assert.equal(bookingBelongsToTenant({}, ownerUid, null), false)
 })

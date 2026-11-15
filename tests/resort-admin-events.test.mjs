@@ -6,7 +6,9 @@ import {
   writeResortAdminAudit,
   writeResortAdminNotification,
 } from "../lib/resort-admin-events.mjs"
-import { getResortNotificationPolicy } from "../lib/resort-notification-policy.mjs"
+import {
+  getResortNotificationPolicy,
+} from "../lib/resort-notification-policy.mjs"
 import { isLowStock, validateInventoryItem } from "../lib/inventory-domain.mjs"
 import {
   getInspectionFindings,
@@ -166,7 +168,7 @@ test("event records validate identifiers and bounded display text", () => {
   )
 })
 
-test("notification policies route transactions to their assigned resort roles", () => {
+test("notification policies route transactions to the assigned resort roles", () => {
   assert.deepEqual(getResortNotificationPolicy("booking.status-updated", "booking").roles, ["admin", "front-desk"])
   assert.deepEqual(getResortNotificationPolicy("payment.received", "booking").roles, ["admin", "finance"])
   assert.deepEqual(getResortNotificationPolicy("contact.status", "contact-message").roles, ["admin", "front-desk"])
@@ -175,18 +177,19 @@ test("notification policies route transactions to their assigned resort roles", 
   assert.equal(getResortNotificationPolicy("platform.application-approved", "platform"), null)
 })
 
-test("resort notifications queue only valid guest emails and use the policy roles", () => {
+test("direct resort notifications inherit role audiences and queue only valid guest emails", () => {
   const writes = []
   let nextId = 0
   const makeCollection = (path) => ({
     doc(id = `generated-${++nextId}`) {
-      return {
+      const ref = {
         id,
         path: `${path}/${id}`,
         collection(name) {
           return makeCollection(`${path}/${id}/${name}`)
         },
       }
+      return ref
     },
   })
   const db = { collection: (name) => makeCollection(name) }
@@ -209,7 +212,7 @@ test("resort notifications queue only valid guest emails and use the policy role
   assert.deepEqual(outbox.data.customerEmails, ["guest@example.com"])
 })
 
-test("audited resort transactions enqueue guest mail without storing recipient emails in audit records", () => {
+test("audited resort transactions queue guest emails without storing them in audit data", () => {
   const writes = []
   let nextId = 0
   const makeCollection = (path) => ({

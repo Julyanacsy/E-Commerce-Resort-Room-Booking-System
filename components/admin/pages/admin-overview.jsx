@@ -275,6 +275,13 @@ export default function AdminOverview({
                 <li key={booking.id} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium text-foreground">{booking.name || "Guest"}</p>
+                    {booking.email ? (
+                      <a className="block truncate text-xs text-muted-foreground underline underline-offset-2" href={`mailto:${booking.email}`}>
+                        {booking.email}
+                      </a>
+                    ) : (
+                      <p className="truncate text-xs text-muted-foreground">No email on file</p>
+                    )}
                     <p className="truncate text-xs text-muted-foreground">
                       {booking.roomType || "Room"} · {formatDate(booking.createdAt)}
                     </p>

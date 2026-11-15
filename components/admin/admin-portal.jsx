@@ -54,7 +54,7 @@ import { BRANDING_DEFAULTS, useBranding } from "@/hooks/use-branding"
 import { useResortOwnerBranding } from "@/hooks/use-resort-owner-branding"
 import { useMarketplaceSettings } from "@/hooks/use-marketplace-settings"
 import { normalizeOwnerUidFromSearchParam } from "@/lib/booking-tenant"
-import { isKamayanHelpdeskEmail } from "@/lib/kamayan-helpdesk.mjs"
+import { resolveResortGuestInfo } from "@/lib/kamayan-guest-info.mjs"
 import { resortAdminRequest } from "@/lib/admin-api-client"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { compressImageFileToDataUrl } from "@/lib/data-url-files"
@@ -101,8 +101,9 @@ import AuditLog from "@/components/admin/pages/audit-log"
 import ManageInventory from "@/components/admin/pages/manage-inventory"
 import RoomItemMonitoring from "@/components/admin/pages/room-item-monitoring"
 import LostAndFound from "@/components/admin/pages/lost-and-found"
+import { canAccessStaffPage } from "@/lib/staff-page-access.mjs"
+const ALLOWED_ADMINS = ["admin@luxestay.com"]
 const ROOMS_PER_PAGE = 6
-const ALLOWED_ADMINS = ["admin@luxestay.com", "resort.helpdesk01@gmail.com"]
 
 const NAV_ITEMS = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -187,7 +188,7 @@ export default function AdminPage({ portalMode }) {
   const [addRoomOpen, setAddRoomOpen] = useState(false)
   const [previewRoom, setPreviewRoom] = useState(null)
   const [previewOpen, setPreviewOpen] = useState(false)
-  const [busyRoomId, setBusyRoomId] = useState(null)
+  const [roomMutationId, setRoomMutationId] = useState(null)
   const [loginOwnerUid, setLoginOwnerUid] = useState(null)
   const [rooms, setRooms] = useState([])
   const [roomsLoading, setRoomsLoading] = useState(true)
@@ -201,38 +202,27 @@ export default function AdminPage({ portalMode }) {
     return "light"
   })
   const isLegacyHelpdesk = Boolean(adminUser?.email && ALLOWED_ADMINS.includes(adminUser.email))
-  const isKamayanHelpdesk = isKamayanHelpdeskEmail(adminUser?.email)
   const tenantOwnerUid = adminUser && !isLegacyHelpdesk
     ? adminUser.tenantOwnerUid || adminUser.uid
     : null
-  const operationalOwnerUid = isKamayanHelpdesk ? adminUser?.uid : tenantOwnerUid
   const staffRole = adminUser?.staffRole || "owner"
-  const canManageResortInventory =
-    staffRole === "owner" || staffRole === "admin" || isKamayanHelpdesk
-  const canAccessRoomMonitoring =
-    ["owner", "admin", "front-desk"].includes(staffRole) || isKamayanHelpdesk
-  const staffNavKeys = {
-    admin: ["manage-bookings", "manage-inventory", "room-item-monitoring", "booking-calendar", "booking-history", "payment-integration", "lost-and-found"],
-    "front-desk": ["manage-bookings", "room-item-monitoring", "booking-calendar", "payment-integration", "lost-and-found"],
-    finance: ["booking-history", "payment-integration"],
-  }
-  const visibleNavItems = (isLegacyHelpdesk
-    ? NAV_ITEMS.filter((item) =>
-      !["lost-and-found", "audit-log"].includes(item.key)
-      && (isKamayanHelpdesk || !["manage-inventory", "room-item-monitoring"].includes(item.key)),
-    )
-    : NAV_ITEMS)
-    .filter((item) => isLegacyHelpdesk || staffRole === "owner" || staffNavKeys[staffRole]?.includes(item.key))
+  const visibleNavItems = NAV_ITEMS.filter((item) =>
+    canAccessStaffPage(staffRole, item.key, { isLegacyHelpdesk }),
+  )
   const visibleSettingsItems = visibleNavItems.filter((item) => SETTINGS_NAV_KEYS.has(item.key))
   const visiblePrimaryNavItems = visibleNavItems.filter((item) => !SETTINGS_NAV_KEYS.has(item.key))
-  const isSettingsPageActive = visibleSettingsItems.some((item) => item.key === currentPage)
-  const showSettingsNavigation = settingsExpanded && (mobileSidebarVisible || sidebarExpanded)
   const defaultPage = staffRole === "owner" || isLegacyHelpdesk
     ? "dashboard"
     : staffRole === "finance"
       ? "payment-integration"
       : "manage-bookings"
+  const activePage = canAccessStaffPage(staffRole, currentPage, { isLegacyHelpdesk })
+    ? currentPage
+    : defaultPage
+  const isSettingsPageActive = visibleSettingsItems.some((item) => item.key === activePage)
+  const showSettingsNavigation = settingsExpanded && (mobileSidebarVisible || sidebarExpanded)
   const navigateToPage = (page) => {
+    if (!canAccessStaffPage(staffRole, page, { isLegacyHelpdesk })) return
     if (SETTINGS_NAV_KEYS.has(page)) setSettingsExpanded(true)
     setCurrentPage(page)
   }
@@ -291,7 +281,7 @@ export default function AdminPage({ portalMode }) {
       const next = ownerBrandingSnapshot ?? BRANDING_DEFAULTS
       // Only replace when snapshot exists; otherwise keep whatever user is editing locally.
       if (!ownerBrandingSnapshot) return prev
-      return { ...prev, ...next }
+      return { ...prev, ...next, ...resolveResortGuestInfo(next) }
     })
   }, [tenantOwnerUid, isLegacyHelpdesk, ownerBrandingSnapshot])
 
@@ -1072,7 +1062,8 @@ export default function AdminPage({ portalMode }) {
 
   const handleRoomSave = async (payload) => {
     try {
-      await resortAdminRequest("/api/resort/rooms", {
+      if (!adminUser?.uid) throw new Error("Sign in again before saving a room.")
+      await resortAdminRequest("/api/resort/admin-mutations", {
         action: "room.create",
         room: {
           name: payload.name,
@@ -1105,7 +1096,8 @@ export default function AdminPage({ portalMode }) {
     const roomId = payload.id || previewRoom?.id
     if (!roomId) return
     try {
-      await resortAdminRequest("/api/resort/rooms", {
+      if (!adminUser?.uid) throw new Error("Sign in again before updating a room.")
+      await resortAdminRequest("/api/resort/admin-mutations", {
         action: "room.update",
         roomId,
         room: {
@@ -1122,7 +1114,6 @@ export default function AdminPage({ portalMode }) {
           availability: payload.availability,
           featured: Boolean(payload.featured),
           images: payload.images,
-          mapsUrl: payload.mapsUrl || "",
         },
       })
       toast.success("Room updated successfully.")
@@ -1137,15 +1128,15 @@ export default function AdminPage({ portalMode }) {
 
   const handleRoomArchiveAction = async (roomId, action) => {
     if (!roomId) return
-    setBusyRoomId(roomId)
+    setRoomMutationId(roomId)
     try {
-      await resortAdminRequest("/api/resort/rooms", { action, roomId })
+      await resortAdminRequest("/api/resort/admin-mutations", { action, roomId })
       toast.success(action === "room.archive" ? "Room archived successfully." : "Room restored successfully.")
     } catch (error) {
       console.error("Failed to update room archive status", error)
-      toast.error(error.message || "Room status could not be updated.")
+      toast.error("Failed to update room. Please try again.")
     } finally {
-      setBusyRoomId(null)
+      setRoomMutationId(null)
     }
   }
 
@@ -1372,7 +1363,7 @@ export default function AdminPage({ portalMode }) {
               : "overflow-hidden lg:overflow-hidden"
           }`}>
             {visiblePrimaryNavItems.map(({ key, label, icon: Icon }) => {
-              const isActive = currentPage === key
+              const isActive = activePage === key
               return (
                 <button
                   key={key}
@@ -1462,7 +1453,7 @@ export default function AdminPage({ portalMode }) {
                   className="mt-1 space-y-1 border-l border-white/20 pl-3 ml-5"
                 >
                   {visibleSettingsItems.map(({ key, label, icon: Icon }) => {
-                    const isActive = currentPage === key
+                    const isActive = activePage === key
                     return (
                       <button
                         key={key}
@@ -1611,7 +1602,7 @@ export default function AdminPage({ portalMode }) {
                 </div>
         </div>
       </div>
-          {currentPage !== defaultPage && (
+          {activePage !== defaultPage && (
             <div className="mb-4">
               <button
                 type="button"
@@ -1624,32 +1615,33 @@ export default function AdminPage({ portalMode }) {
               </button>
             </div>
           )}
-          {currentPage === "dashboard" && (
+          {activePage === "dashboard" && (
             <AdminOverview
               isLegacyHelpdesk={isLegacyHelpdesk}
-              ownerUid={operationalOwnerUid}
+              ownerUid={tenantOwnerUid}
               rooms={rooms}
               roomsLoading={roomsLoading}
               roomsError={roomsError}
-              canViewInventory={canManageResortInventory}
+              canViewInventory={!isLegacyHelpdesk && (staffRole === "owner" || staffRole === "admin")}
               onOpenInventory={() => navigateToPage("manage-inventory")}
             />
           )}
 
-          {currentPage === "manage-inventory" && canManageResortInventory && (
+          {activePage === "manage-inventory" && (staffRole === "owner" || staffRole === "admin") && (
             <ManageInventory />
           )}
-          {currentPage === "room-item-monitoring"
-            && canAccessRoomMonitoring
+          {activePage === "room-item-monitoring"
+            && !isLegacyHelpdesk
+            && ["owner", "admin", "front-desk"].includes(staffRole)
             && (
-              <RoomItemMonitoring canManageItems={staffRole === "owner" || staffRole === "admin" || isKamayanHelpdesk} />
+              <RoomItemMonitoring canManageItems={staffRole === "owner" || staffRole === "admin"} />
             )}
-          {currentPage === "lost-and-found"
+          {activePage === "lost-and-found"
             && !isLegacyHelpdesk
             && ["owner", "admin", "front-desk"].includes(staffRole)
             && <LostAndFound />}
 
-          {currentPage === "manage-rooms" && (
+          {activePage === "manage-rooms" && (
             <ManageRooms
               rooms={rooms}
               loading={roomsLoading}
@@ -1660,7 +1652,7 @@ export default function AdminPage({ portalMode }) {
                 setPreviewRoom(room)
                 setPreviewOpen(true)
               }}
-              busyRoomId={busyRoomId}
+              busyRoomId={roomMutationId}
               onArchiveRoom={(roomId) => handleRoomArchiveAction(roomId, "room.archive")}
               onRestoreRoom={(roomId) => handleRoomArchiveAction(roomId, "room.restore")}
               roomsPage={roomsPage}
@@ -1668,7 +1660,7 @@ export default function AdminPage({ portalMode }) {
             />
           )}
 
-          {currentPage === "manage-bookings" && (
+          {activePage === "manage-bookings" && (
             <ManageBookings
               isLegacyHelpdesk={isLegacyHelpdesk}
               ownerUid={tenantOwnerUid}
@@ -1682,7 +1674,7 @@ export default function AdminPage({ portalMode }) {
             />
           )}
 
-          {currentPage === "booking-history" && (
+          {activePage === "booking-history" && (
             <BookingHistory
               isLegacyHelpdesk={isLegacyHelpdesk}
               ownerUid={tenantOwnerUid}
@@ -1696,22 +1688,22 @@ export default function AdminPage({ portalMode }) {
             />
           )}
 
-          {currentPage === "booking-calendar" && <BookingCalendar />}
-          {currentPage === "reminder-settings" && staffRole === "owner" && (
+          {activePage === "booking-calendar" && <BookingCalendar />}
+          {activePage === "reminder-settings" && staffRole === "owner" && (
             <ReminderSettings ownerUid={tenantOwnerUid} />
           )}
-          {currentPage === "audit-log" && staffRole === "owner" && !isLegacyHelpdesk && <AuditLog />}
+          {activePage === "audit-log" && staffRole === "owner" && !isLegacyHelpdesk && <AuditLog />}
 
-          {currentPage === "contact-messages" && (
+          {activePage === "contact-messages" && (
             <ManageContact isLegacyHelpdesk={isLegacyHelpdesk} ownerUid={tenantOwnerUid} />
           )}
 
-          {currentPage === "manage-feedback" && (
+          {activePage === "manage-feedback" && (
             <ManageFeedback isLegacyHelpdesk={isLegacyHelpdesk} ownerUid={tenantOwnerUid} />
           )}
 
 
-          {currentPage === "brand-settings" && (
+          {activePage === "brand-settings" && (
             <div>
               <h1 className="text-3xl font-bold text-foreground mb-8">Brand Settings</h1>
               <div className="grid gap-8 lg:grid-cols-2">
@@ -1963,6 +1955,70 @@ export default function AdminPage({ portalMode }) {
                       })}
                     </div>
                   </div>
+
+                  {!isLegacyHelpdesk && tenantOwnerUid && (
+                    <div className="space-y-4 border-t border-border pt-4">
+                      <div>
+                        <h2 className="text-xl font-semibold text-foreground">Guest announcement, rates &amp; resort info</h2>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          These editable details appear on your public resort page and in guest confirmation/check-in emails. Add only details that apply to your resort. Rates and fees are informational and are not added to room booking totals.
+                        </p>
+                      </div>
+                      <label className="block text-sm font-semibold text-foreground">
+                        Announcement title
+                        <input
+                          type="text"
+                          maxLength={120}
+                          value={brandForm.guestAnnouncementTitle || ""}
+                          onChange={handleBrandFieldChange("guestAnnouncementTitle")}
+                          className="mt-2 w-full rounded-lg border border-border bg-background px-4 py-2 font-normal text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        />
+                      </label>
+                      <label className="block text-sm font-semibold text-foreground">
+                        Landing page announcement
+                        <textarea
+                          rows={3}
+                          maxLength={1200}
+                          value={brandForm.guestAnnouncementText || ""}
+                          onChange={handleBrandFieldChange("guestAnnouncementText")}
+                          className="mt-2 w-full rounded-lg border border-border bg-background px-4 py-2 font-normal text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        />
+                      </label>
+                      <label className="block text-sm font-semibold text-foreground">
+                        On-site rates, fees, and other charges
+                        <textarea
+                          rows={8}
+                          maxLength={3000}
+                          value={brandForm.guestRatesText || ""}
+                          onChange={handleBrandFieldChange("guestRatesText")}
+                          className="mt-2 w-full rounded-lg border border-border bg-background px-4 py-2 font-normal text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        />
+                        <span className="mt-1 block text-xs font-normal text-muted-foreground">
+                          Shown as a separate informational list; it does not change room reservation charges.
+                        </span>
+                      </label>
+                      <label className="block text-sm font-semibold text-foreground">
+                        Resort contacts
+                        <textarea
+                          rows={4}
+                          maxLength={1200}
+                          value={brandForm.guestContactText || ""}
+                          onChange={handleBrandFieldChange("guestContactText")}
+                          className="mt-2 w-full rounded-lg border border-border bg-background px-4 py-2 font-normal text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        />
+                      </label>
+                      <label className="block text-sm font-semibold text-foreground">
+                        Amenities
+                        <textarea
+                          rows={4}
+                          maxLength={1500}
+                          value={brandForm.guestAmenitiesText || ""}
+                          onChange={handleBrandFieldChange("guestAmenitiesText")}
+                          className="mt-2 w-full rounded-lg border border-border bg-background px-4 py-2 font-normal text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        />
+                      </label>
+                    </div>
+                  )}
 
                   {!isLegacyHelpdesk && tenantOwnerUid && (
                     <div className="space-y-4 border-t border-border pt-4">
@@ -2249,7 +2305,7 @@ export default function AdminPage({ portalMode }) {
             </div>
           )}
 
-          {currentPage === "payment-integration" && (
+          {activePage === "payment-integration" && (
             <PaymentSettings
               tenantOwnerUid={tenantOwnerUid}
               isLegacyHelpdesk={isLegacyHelpdesk}
@@ -2257,7 +2313,7 @@ export default function AdminPage({ portalMode }) {
             />
           )}
 
-          {currentPage === "staff-management" && staffRole === "owner" && <StaffManagement />}
+          {activePage === "staff-management" && staffRole === "owner" && <StaffManagement />}
         </div>
       </main>
     </div>
