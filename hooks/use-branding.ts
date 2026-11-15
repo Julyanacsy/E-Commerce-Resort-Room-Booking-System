@@ -27,6 +27,11 @@ export type Branding = {
   facebook: string
   twitter: string
   linkedin: string
+  guestAnnouncementTitle?: string
+  guestAnnouncementText?: string
+  guestRatesText?: string
+  guestContactText?: string
+  guestAmenitiesText?: string
 }
 
 const BRANDING_DOC_ID = "branding"

@@ -9,6 +9,7 @@ import {
 import { renderBookingEmailLayout } from "@/lib/booking-email-layout"
 import { getOutstandingPaymentBalance, getRecordedPaymentAmount } from "@/lib/payment-domain.mjs"
 import { writeResortAdminAudit } from "@/lib/resort-admin-events.mjs"
+import { resolveKamayanGuestInfo } from "@/lib/kamayan-guest-info.mjs"
 
 export async function POST(request) {
   const authResult = await authenticateBookingAdmin(request)
@@ -69,11 +70,32 @@ export async function POST(request) {
     if (!booking.email) return jsonFailure("This booking has no guest email address.", 409)
     const emailDetails = []
     if (type === "booking" && status === "Approved" && booking.ownerUid) {
-      const ownerSnapshot = await db.collection("resortOwners").doc(String(booking.ownerUid)).get()
-      const rules = String(ownerSnapshot.get("resortRulesText") || "").trim()
-      const checkInInstructions = String(ownerSnapshot.get("checkInInstructions") || "").trim()
+      const ownerRef = db.collection("resortOwners").doc(String(booking.ownerUid))
+      const [ownerSnapshot, brandingSnapshot] = await Promise.all([
+        ownerRef.get(),
+        ownerRef.collection("site").doc("branding").get(),
+      ])
+      const ownerData = ownerSnapshot.exists ? ownerSnapshot.data() : {}
+      const branding = brandingSnapshot.exists ? brandingSnapshot.data() : {}
+      const guestInfo = resolveKamayanGuestInfo({
+        ...ownerData,
+        ...branding,
+        name: branding.name || ownerData.name || booking.resortName || booking.hotelName || "",
+      })
+      const rules = String(ownerData.resortRulesText || guestInfo.resortRulesText || "").trim()
+      const checkInInstructions = String(
+        ownerData.checkInInstructions || guestInfo.checkInInstructions || "",
+      ).trim()
       if (rules) emailDetails.push({ title: "Resort rules and regulations", body: rules })
       if (checkInInstructions) emailDetails.push({ title: "Check-in instructions", body: checkInInstructions })
+      emailDetails.push(
+        ...[
+          { title: guestInfo.guestAnnouncementTitle, body: guestInfo.guestAnnouncementText },
+          { title: "Entrance fees and cottage rates", body: guestInfo.guestRatesText },
+          { title: "Resort contacts", body: guestInfo.guestContactText },
+          { title: "Amenities", body: guestInfo.guestAmenitiesText },
+        ].filter((detail) => detail.body),
+      )
     }
     await mail.transporter.sendMail({
       from: `"${mail.brandName}" <${mail.user}>`,

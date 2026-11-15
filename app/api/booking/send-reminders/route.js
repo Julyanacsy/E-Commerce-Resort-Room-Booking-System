@@ -4,6 +4,7 @@ import { getBookingDb, getManilaDate, jsonFailure } from "@/lib/booking-api-serv
 import { writeResortAdminAudit } from "@/lib/resort-admin-events.mjs"
 import { getDueBookingReminderKinds } from "@/lib/booking-reminder-domain.mjs"
 import { getPublicAppUrl, issueBookingFeedbackToken } from "@/lib/booking-feedback-server"
+import { resolveKamayanGuestInfo } from "@/lib/kamayan-guest-info.mjs"
 
 export async function GET(request) {
   const secret = String(process.env.CRON_SECRET || "").trim()
@@ -38,12 +39,26 @@ export async function GET(request) {
       const ownerUid = String(booking.ownerUid || "")
       let ownerData = {}
       if (ownerUid && !ownerSettings.has(ownerUid)) {
-        const ownerSnapshot = await db.collection("resortOwners").doc(ownerUid).get()
-        ownerSettings.set(ownerUid, ownerSnapshot.exists ? ownerSnapshot.data() : {})
+        const ownerRef = db.collection("resortOwners").doc(ownerUid)
+        const [ownerSnapshot, brandingSnapshot] = await Promise.all([
+          ownerRef.get(),
+          ownerRef.collection("site").doc("branding").get(),
+        ])
+        ownerSettings.set(ownerUid, {
+          ...(ownerSnapshot.exists ? ownerSnapshot.data() : {}),
+          ...(brandingSnapshot.exists ? brandingSnapshot.data() : {}),
+        })
       }
       ownerData = ownerUid ? ownerSettings.get(ownerUid) || {} : {}
-      const instructions = String(ownerData.checkInInstructions || "").trim()
-      const rules = String(ownerData.resortRulesText || "").trim()
+      const guestInfo = resolveKamayanGuestInfo(ownerData)
+      const instructions = String(ownerData.checkInInstructions || guestInfo.checkInInstructions || "").trim()
+      const rules = String(ownerData.resortRulesText || guestInfo.resortRulesText || "").trim()
+      const guestDetails = [
+        { title: guestInfo.guestAnnouncementTitle, body: guestInfo.guestAnnouncementText },
+        { title: "Entrance fees and cottage rates", body: guestInfo.guestRatesText },
+        { title: "Resort contacts", body: guestInfo.guestContactText },
+        { title: "Amenities", body: guestInfo.guestAmenitiesText },
+      ].filter((detail) => detail.body)
       const reminderKinds = getDueBookingReminderKinds(booking, today)
 
       for (const kind of reminderKinds) {
@@ -57,6 +72,7 @@ export async function GET(request) {
               details: [
                 ...(rules ? [{ title: "Resort rules and regulations", body: rules }] : []),
                 ...(instructions ? [{ title: "Check-in instructions", body: instructions }] : []),
+                ...guestDetails,
               ],
             }
           } else if (kind === "checkIn") {
@@ -64,7 +80,11 @@ export async function GET(request) {
               title: "Check-in reminder",
               message: `Your stay at ${booking.roomType || "the resort"} begins tomorrow, ${booking.checkIn}.`,
               subject: `Check-in reminder: ${item.id}`,
-              details: instructions ? [{ title: "Check-in instructions", body: instructions }] : [],
+              details: [
+                ...(instructions ? [{ title: "Check-in instructions", body: instructions }] : []),
+                ...(rules ? [{ title: "Resort rules and regulations", body: rules }] : []),
+                ...guestDetails,
+              ],
             }
           } else if (kind === "checkOut") {
             reminder = {

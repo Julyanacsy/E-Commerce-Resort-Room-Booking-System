@@ -54,6 +54,7 @@ import { BRANDING_DEFAULTS, useBranding } from "@/hooks/use-branding"
 import { useResortOwnerBranding } from "@/hooks/use-resort-owner-branding"
 import { useMarketplaceSettings } from "@/hooks/use-marketplace-settings"
 import { normalizeOwnerUidFromSearchParam } from "@/lib/booking-tenant"
+import { isKamayanResort, resolveKamayanGuestInfo } from "@/lib/kamayan-guest-info.mjs"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { compressImageFileToDataUrl } from "@/lib/data-url-files"
 import {
@@ -281,7 +282,7 @@ export default function AdminPage({ portalMode }) {
       const next = ownerBrandingSnapshot ?? BRANDING_DEFAULTS
       // Only replace when snapshot exists; otherwise keep whatever user is editing locally.
       if (!ownerBrandingSnapshot) return prev
-      return { ...prev, ...next }
+      return { ...prev, ...next, ...resolveKamayanGuestInfo(next) }
     })
   }, [tenantOwnerUid, isLegacyHelpdesk, ownerBrandingSnapshot])
 
@@ -1955,6 +1956,70 @@ export default function AdminPage({ portalMode }) {
                       })}
                     </div>
                   </div>
+
+                  {!isLegacyHelpdesk && tenantOwnerUid && isKamayanResort(brandForm.name) && (
+                    <div className="space-y-4 border-t border-border pt-4">
+                      <div>
+                        <h2 className="text-xl font-semibold text-foreground">Guest announcement, rates &amp; resort info</h2>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          These editable details appear on your public resort page and in guest confirmation/check-in emails. Entrance and cottage rates are informational and are not added to room booking totals.
+                        </p>
+                      </div>
+                      <label className="block text-sm font-semibold text-foreground">
+                        Announcement title
+                        <input
+                          type="text"
+                          maxLength={120}
+                          value={brandForm.guestAnnouncementTitle || ""}
+                          onChange={handleBrandFieldChange("guestAnnouncementTitle")}
+                          className="mt-2 w-full rounded-lg border border-border bg-background px-4 py-2 font-normal text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        />
+                      </label>
+                      <label className="block text-sm font-semibold text-foreground">
+                        Landing page announcement
+                        <textarea
+                          rows={3}
+                          maxLength={1200}
+                          value={brandForm.guestAnnouncementText || ""}
+                          onChange={handleBrandFieldChange("guestAnnouncementText")}
+                          className="mt-2 w-full rounded-lg border border-border bg-background px-4 py-2 font-normal text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        />
+                      </label>
+                      <label className="block text-sm font-semibold text-foreground">
+                        Entrance fees and cottage rates
+                        <textarea
+                          rows={8}
+                          maxLength={3000}
+                          value={brandForm.guestRatesText || ""}
+                          onChange={handleBrandFieldChange("guestRatesText")}
+                          className="mt-2 w-full rounded-lg border border-border bg-background px-4 py-2 font-normal text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        />
+                        <span className="mt-1 block text-xs font-normal text-muted-foreground">
+                          Shown as a separate informational list; it does not change room reservation charges.
+                        </span>
+                      </label>
+                      <label className="block text-sm font-semibold text-foreground">
+                        Resort contacts
+                        <textarea
+                          rows={4}
+                          maxLength={1200}
+                          value={brandForm.guestContactText || ""}
+                          onChange={handleBrandFieldChange("guestContactText")}
+                          className="mt-2 w-full rounded-lg border border-border bg-background px-4 py-2 font-normal text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        />
+                      </label>
+                      <label className="block text-sm font-semibold text-foreground">
+                        Amenities
+                        <textarea
+                          rows={4}
+                          maxLength={1500}
+                          value={brandForm.guestAmenitiesText || ""}
+                          onChange={handleBrandFieldChange("guestAmenitiesText")}
+                          className="mt-2 w-full rounded-lg border border-border bg-background px-4 py-2 font-normal text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        />
+                      </label>
+                    </div>
+                  )}
 
                   {!isLegacyHelpdesk && tenantOwnerUid && (
                     <div className="space-y-4 border-t border-border pt-4">

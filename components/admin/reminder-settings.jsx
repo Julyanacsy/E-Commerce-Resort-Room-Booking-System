@@ -5,6 +5,7 @@ import { doc, onSnapshot } from "firebase/firestore"
 import { toast } from "sonner"
 import { db } from "@/lib/firebase"
 import { resortAdminRequest } from "@/lib/admin-api-client"
+import { resolveKamayanGuestInfo } from "@/lib/kamayan-guest-info.mjs"
 
 export default function ReminderSettings({ ownerUid }) {
   const [instructions, setInstructions] = useState("")
@@ -21,24 +22,60 @@ export default function ReminderSettings({ ownerUid }) {
       setLoading(false)
       return undefined
     }
-    return onSnapshot(
+    let ownerSettings = {}
+    let branding = {}
+    let ownerLoaded = false
+    let brandingLoaded = false
+    const syncSettings = () => {
+      if (!ownerLoaded || !brandingLoaded) return
+      const guestInfo = resolveKamayanGuestInfo(branding)
+      setInstructions(String(
+        "checkInInstructions" in ownerSettings
+          ? ownerSettings.checkInInstructions || ""
+          : guestInfo.checkInInstructions,
+      ))
+      setRules(String(
+        "resortRulesText" in ownerSettings
+          ? ownerSettings.resortRulesText || ""
+          : guestInfo.resortRulesText,
+      ))
+      setWifiNetworkName(String(ownerSettings.wifiNetworkName || ""))
+      setWifiPassword(String(ownerSettings.wifiPassword || ""))
+      setWifiVoucherCode(String(ownerSettings.wifiVoucherCode || ""))
+      setWifiInstructions(String(ownerSettings.wifiInstructions || ""))
+      setLoading(false)
+    }
+    const unsubscribeOwner = onSnapshot(
       doc(db, "resortOwners", ownerUid),
       (snapshot) => {
-        const settings = snapshot.data() || {}
-        setInstructions(String(settings.checkInInstructions || ""))
-        setRules(String(settings.resortRulesText || ""))
-        setWifiNetworkName(String(settings.wifiNetworkName || ""))
-        setWifiPassword(String(settings.wifiPassword || ""))
-        setWifiVoucherCode(String(settings.wifiVoucherCode || ""))
-        setWifiInstructions(String(settings.wifiInstructions || ""))
-        setLoading(false)
+        ownerSettings = snapshot.data() || {}
+        ownerLoaded = true
+        syncSettings()
       },
       (error) => {
         console.error("Failed to load reminder settings:", error)
         toast.error("Reminder settings could not be loaded.")
-        setLoading(false)
+        ownerLoaded = true
+        syncSettings()
       },
     )
+    const unsubscribeBranding = onSnapshot(
+      doc(db, "resortOwners", ownerUid, "site", "branding"),
+      (snapshot) => {
+        branding = snapshot.data() || {}
+        brandingLoaded = true
+        syncSettings()
+      },
+      (error) => {
+        console.error("Failed to load resort branding for reminder defaults:", error)
+        brandingLoaded = true
+        syncSettings()
+      },
+    )
+    return () => {
+      unsubscribeOwner()
+      unsubscribeBranding()
+    }
   }, [ownerUid])
 
   const save = async () => {
@@ -70,6 +107,9 @@ export default function ReminderSettings({ ownerUid }) {
       <header>
         <h1 className="text-3xl font-bold text-foreground">Guest Information &amp; Reminders</h1>
         <p className="mt-1 text-sm text-muted-foreground">Guests receive your resort rules when their booking is confirmed. The daily scheduled job sends reminders one day before check-in and checkout, then a one-time feedback link after verified checkout.</p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Kamayan announcement, entrance/cottage rates, contacts, and amenities are included in guest confirmation and check-in emails. Edit those details in Brand Settings.
+        </p>
       </header>
       <div className="space-y-3 rounded-2xl border border-border bg-card p-5">
         <div>
