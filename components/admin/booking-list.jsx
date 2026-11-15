@@ -185,11 +185,15 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
             : item,
         ),
       )
-      toast.success(action === "check-in"
-        ? result.balancePaid > 0
-          ? `Balance of ${formatMoney(result.balancePaid)} recorded; guest checked in.`
-          : "Guest checked in."
-        : "Guest checked out.")
+      if (action === "check-in" && result.wifiAccessEmailWarning) {
+        toast.warning(result.wifiAccessEmailWarning)
+      } else {
+        toast.success(action === "check-in"
+          ? result.balancePaid > 0
+            ? `Balance of ${formatMoney(result.balancePaid)} recorded; guest checked in. Wi-Fi access link emailed to the guest.`
+            : "Guest checked in. Wi-Fi access link emailed to the guest."
+          : "Guest checked out.")
+      }
     } catch (updateError) {
       console.error("Failed to update guest stay status:", updateError)
       toast.error(updateError.message || "Check-in/check-out could not be updated.")

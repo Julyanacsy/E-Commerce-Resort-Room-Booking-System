@@ -1,3 +1,4 @@
+import { resolveCentralEnvMail } from "@/lib/central-env-mail"
 import {
   authenticateBookingAdmin,
   canManageBooking,
@@ -5,6 +6,8 @@ import {
   hasBookingPermission,
   jsonFailure,
 } from "@/lib/booking-api-server"
+import { renderBookingEmailLayout } from "@/lib/booking-email-layout"
+import { getPublicAppUrl } from "@/lib/booking-feedback-server"
 import { getOutstandingPaymentBalance, getRecordedPaymentAmount } from "@/lib/payment-domain.mjs"
 import { writeResortAdminAudit } from "@/lib/resort-admin-events.mjs"
 
@@ -144,11 +147,55 @@ export async function POST(request) {
         balancePaid: paymentUpdate?.amount || 0,
       }
     })
+    let wifiAccessEmailSent = false
+    let wifiAccessEmailWarning = ""
+    if (action === "check-in") {
+      const guestEmail = String(snapshot.get("email") || "").trim()
+      const ownerUid = String(snapshot.get("ownerUid") || authResult.user.ownerUid || "").trim()
+      if (!guestEmail || !ownerUid) {
+        wifiAccessEmailWarning = "Guest checked in, but the Wi-Fi access email could not be sent because booking contact details are missing."
+      } else {
+        try {
+          const mail = await resolveCentralEnvMail()
+          if (!mail.ok) {
+            console.error("Guest Wi-Fi access email unavailable:", mail.code, mail.message)
+            wifiAccessEmailWarning = "Guest checked in, but the Wi-Fi access email could not be sent. Check the email configuration."
+          } else {
+            const accessUrl = new URL("/", getPublicAppUrl(request))
+            accessUrl.searchParams.set("o", ownerUid)
+            accessUrl.searchParams.set("guestWifi", "1")
+            const resortName = String(snapshot.get("resortName") || snapshot.get("hotelName") || mail.brandName || "the resort")
+            const message = `You are checked in at ${resortName}. Open the resort landing page and verify your booking to view the Wi-Fi details.`
+            await mail.transporter.sendMail({
+              from: `"${mail.brandName}" <${mail.user}>`,
+              to: guestEmail,
+              replyTo: mail.replyTo,
+              subject: `Guest Wi-Fi access for your stay at ${resortName}`,
+              text: `${message}\nBooking reference: ${bookingId}\n\nOpen the resort landing page: ${accessUrl.toString()}`,
+              html: renderBookingEmailLayout({
+                title: "Guest Wi-Fi access",
+                greeting: `Hello ${String(snapshot.get("name") || "Guest")},`,
+                message: `${message} You will need your booking reference and booking email to verify access.`,
+                brandName: resortName,
+                details: [{ title: "Booking reference", body: bookingId }],
+                actionLink: { href: accessUrl.toString(), label: "Open resort landing page" },
+              }),
+            })
+            wifiAccessEmailSent = true
+          }
+        } catch (emailError) {
+          console.error("Failed to send guest Wi-Fi access email:", emailError)
+          wifiAccessEmailWarning = "Guest checked in, but the Wi-Fi access email could not be sent. Check the email configuration and arrange Wi-Fi access with the guest."
+        }
+      }
+    }
     return Response.json({
       success: true,
       bookingId,
       stayStatus: action === "check-in" ? "checked_in" : "checked_out",
       timestamp: now.toISOString(),
+      wifiAccessEmailSent,
+      ...(wifiAccessEmailWarning ? { wifiAccessEmailWarning } : {}),
       ...result,
     })
   } catch (error) {
