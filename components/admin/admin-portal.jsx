@@ -100,6 +100,7 @@ import AuditLog from "@/components/admin/pages/audit-log"
 import ManageInventory from "@/components/admin/pages/manage-inventory"
 import RoomItemMonitoring from "@/components/admin/pages/room-item-monitoring"
 import LostAndFound from "@/components/admin/pages/lost-and-found"
+const ROOMS_PER_PAGE = 6
 const ALLOWED_ADMINS = ["admin@luxestay.com", "resort.helpdesk01@gmail.com"]
 
 const NAV_ITEMS = [
