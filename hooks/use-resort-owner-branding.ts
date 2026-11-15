@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { db } from "@/lib/firebase"
-import { doc, onSnapshot, setDoc, type DocumentData } from "firebase/firestore"
+import { doc, onSnapshot, type DocumentData } from "firebase/firestore"
 import { BRANDING_DEFAULTS, type Branding } from "@/hooks/use-branding"
+import { resortAdminRequest } from "@/lib/admin-api-client"
 
 function brandingDocRef(ownerUid: string) {
   return doc(db, "resortOwners", ownerUid, "site", "branding")
@@ -62,7 +63,10 @@ export function useResortOwnerBranding(ownerUid: string | null) {
 
   const updateBranding = useCallback(async (payload: DocumentData) => {
     if (!db || !ownerUid) throw new Error("Resort owner not loaded")
-    await setDoc(brandingDocRef(ownerUid), payload, { merge: true })
+    await resortAdminRequest("/api/resort/admin-mutations", {
+      action: "branding.update",
+      branding: payload,
+    })
   }, [ownerUid])
 
   return { branding, updateBranding, loading }

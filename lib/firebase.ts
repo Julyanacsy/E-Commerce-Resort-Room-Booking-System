@@ -1,6 +1,6 @@
 import { getApp, getApps, initializeApp } from "firebase/app"
 import { getAuth, GoogleAuthProvider } from "firebase/auth"
-import { getFirestore } from "firebase/firestore"
+import { initializeFirestore } from "firebase/firestore"
 import type { Analytics } from "firebase/analytics"
 import { firebasePublicConfig as pub } from "./firebase-public-config"
 
@@ -19,7 +19,7 @@ const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig)
 // Only initialize client-side services in browser
 const auth = typeof window !== "undefined" ? getAuth(app) : null
 const googleProvider = typeof window !== "undefined" ? new GoogleAuthProvider() : null
-const db = getFirestore(app)
+const db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true })
 
 let analyticsInstance: Analytics | null = null
 
@@ -32,4 +32,3 @@ export const getAnalyticsClient = async () => {
 }
 
 export { app, auth, googleProvider, db }
-

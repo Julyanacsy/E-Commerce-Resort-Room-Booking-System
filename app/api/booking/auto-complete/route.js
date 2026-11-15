@@ -60,9 +60,10 @@ export async function POST(request) {
           action: "booking.auto-completed",
           entityType: "booking",
           entityId: item.id,
-          summary: "Booking was automatically marked completed after checkout.",
+          summary: `Booking ${item.id} was automatically marked completed after checkout.`,
           before: { bookingStatus: "Approved" },
           after: { bookingStatus: "Completed" },
+          emailRecipients: current.get("email") ? [String(current.get("email"))] : [],
         })
         return true
       })

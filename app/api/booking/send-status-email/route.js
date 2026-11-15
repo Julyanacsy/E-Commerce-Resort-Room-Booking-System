@@ -7,6 +7,7 @@ import {
   jsonFailure,
 } from "@/lib/booking-api-server"
 import { renderBookingEmailLayout } from "@/lib/booking-email-layout"
+import { getOutstandingPaymentBalance, getRecordedPaymentAmount } from "@/lib/payment-domain.mjs"
 import { writeResortAdminAudit } from "@/lib/resort-admin-events.mjs"
 
 export async function POST(request) {
@@ -47,10 +48,13 @@ export async function POST(request) {
     const status = String(booking.status || "Pending")
     const paymentStatus = String(booking.paymentStatus || "unpaid")
     const paymentMethod = String(booking.paymentMethod || "gcash")
+    const paidAmount = getRecordedPaymentAmount(booking)
+    const balanceDue = getOutstandingPaymentBalance(booking)
     const message =
       type === "payment"
         ? {
-            paid: `Your ${paymentMethod === "cash" ? "cash payment" : "GCash payment"} for booking ${bookingId} has been recorded as paid.`,
+            paid: `Your booking ${bookingId} is fully paid. Total received: PHP ${paidAmount.toLocaleString("en-PH")}.`,
+            partially_paid: `Your reservation deposit of PHP ${paidAmount.toLocaleString("en-PH")} for booking ${bookingId} has been verified. The remaining balance of PHP ${balanceDue.toLocaleString("en-PH")} is due at check-in.`,
             rejected: `Your payment proof for booking ${bookingId} could not be verified. Please contact the resort for assistance.`,
           }[paymentStatus]
         : {
@@ -63,17 +67,28 @@ export async function POST(request) {
     if (!message) return jsonFailure("No status email is available for this booking.", 400)
 
     if (!booking.email) return jsonFailure("This booking has no guest email address.", 409)
+    const emailDetails = []
+    if (type === "booking" && status === "Approved" && booking.ownerUid) {
+      const ownerSnapshot = await db.collection("resortOwners").doc(String(booking.ownerUid)).get()
+      const rules = String(ownerSnapshot.get("resortRulesText") || "").trim()
+      const checkInInstructions = String(ownerSnapshot.get("checkInInstructions") || "").trim()
+      if (rules) emailDetails.push({ title: "Resort rules and regulations", body: rules })
+      if (checkInInstructions) emailDetails.push({ title: "Check-in instructions", body: checkInInstructions })
+    }
     await mail.transporter.sendMail({
       from: `"${mail.brandName}" <${mail.user}>`,
       to: booking.email,
       replyTo: mail.replyTo,
       subject: type === "payment" ? `Payment update: ${paymentStatus}` : `Booking update: ${status}`,
-      text: `${message}\nBooking reference: ${bookingId}`,
+      text: `${message}\nBooking reference: ${bookingId}${emailDetails.length
+        ? `\n\n${emailDetails.map((detail) => `${detail.title}:\n${detail.body}`).join("\n\n")}`
+        : ""}`,
       html: renderBookingEmailLayout({
         title: type === "payment" ? `Payment ${paymentStatus}` : `Booking ${status.toLowerCase()}`,
         greeting: `Hello ${booking.name || "Guest"},`,
         message: `${message} Booking reference: ${bookingId}.`,
         brandName: mail.brandName,
+        details: emailDetails,
       }),
     })
     if (type === "booking" && status === "Approved") {

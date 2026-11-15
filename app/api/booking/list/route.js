@@ -52,14 +52,15 @@ export async function GET(request) {
           validIdUrl,
           ...safeBooking
         } = booking
-        const isOwner = user.isOwner && booking.ownerUid === user.ownerUid
         const canViewPaymentProof = hasBookingPermission(user, "payment")
         const rawPaymentStatus = String(booking.paymentStatus || "unpaid")
         return {
           ...safeBooking,
           paymentStatus: rawPaymentStatus === "submitted_for_review" ? "proof_submitted" : rawPaymentStatus,
           hasProofOfPayment: canViewPaymentProof && Boolean(proofOfPaymentImage || proofOfPaymentUrl),
-          hasValidId: isOwner && booking.status !== "Completed" && Boolean(validIdImage || validIdUrl),
+          hasValidId: hasBookingPermission(user, "payment")
+            && booking.status !== "Completed"
+            && Boolean(validIdImage || validIdUrl),
           createdAt: booking.createdAt?.toDate?.().toISOString() || null,
           updatedAt: booking.updatedAt?.toDate?.().toISOString() || null,
           paymentReviewedAt: booking.paymentReviewedAt?.toDate?.().toISOString() || null,

@@ -102,7 +102,7 @@ export async function POST(request) {
         action: "refund.updated",
         entityType: "booking",
         entityId: bookingId,
-        summary: "A booking refund record was updated.",
+        summary: `Refund for booking ${bookingId} was updated to PHP ${amount.toLocaleString("en-PH")} (${amount > 0 ? status : "not applicable"}).`,
         before: {
           refundAmount: Number(current.get("refundAmount") || 0),
           refundStatus: String(current.get("refundStatus") || ""),
@@ -113,6 +113,7 @@ export async function POST(request) {
           refundStatus: amount > 0 ? status : "not_applicable",
           refundDate: date || "",
         },
+        emailRecipients: current.get("email") ? [String(current.get("email"))] : [],
       })
     })
     return Response.json({ success: true, refundAmount: amount, refundStatus: amount ? status : "not_applicable" })

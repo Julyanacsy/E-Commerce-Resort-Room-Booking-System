@@ -1,8 +1,10 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Banknote, BedDouble, CalendarCheck, Clock3, RefreshCw } from "lucide-react"
+import { AlertTriangle, Banknote, BedDouble, CalendarCheck, Clock3, Package, RefreshCw } from "lucide-react"
 import { bookingAdminRequest } from "@/lib/booking-admin-client"
+import { resortAdminRequest } from "@/lib/admin-api-client"
+import { isLowStock } from "@/lib/inventory-domain.mjs"
 
 function toDate(value) {
   if (!value) return null
@@ -31,7 +33,7 @@ function formatMoney(value) {
 }
 
 function getPaidAmount(booking) {
-  const amount = Number(booking.paidAmount ?? booking.totalPrice ?? 0)
+  const amount = Number(booking.paymentAmount ?? booking.paidAmount ?? (booking.paymentStatus === "paid" ? booking.totalPrice : 0) ?? 0)
   return Number.isFinite(amount) && amount > 0 ? amount : 0
 }
 
@@ -45,10 +47,15 @@ export default function AdminOverview({
   rooms = [],
   roomsLoading = false,
   roomsError = "",
+  canViewInventory = false,
+  onOpenInventory,
 }) {
   const [bookings, setBookings] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
+  const [inventoryItems, setInventoryItems] = useState([])
+  const [inventoryLoading, setInventoryLoading] = useState(true)
+  const [inventoryError, setInventoryError] = useState("")
 
   const loadBookings = useCallback(async () => {
     setLoading(true)
@@ -74,13 +81,37 @@ export default function AdminOverview({
     loadBookings()
   }, [loadBookings, isLegacyHelpdesk, ownerUid])
 
+  useEffect(() => {
+    let active = true
+    if (!ownerUid || !canViewInventory) {
+      setInventoryItems([])
+      setInventoryLoading(false)
+      return () => { active = false }
+    }
+
+    setInventoryLoading(true)
+    setInventoryError("")
+    resortAdminRequest("/api/resort/inventory", undefined, "GET")
+      .then((result) => {
+        if (!Array.isArray(result.items)) throw new Error("The inventory service returned invalid data.")
+        if (active) setInventoryItems(result.items)
+      })
+      .catch((loadError) => {
+        console.error("Failed to load dashboard inventory:", loadError)
+        if (active) setInventoryError(loadError.message || "Inventory could not be loaded.")
+      })
+      .finally(() => {
+        if (active) setInventoryLoading(false)
+      })
+
+    return () => { active = false }
+  }, [canViewInventory, ownerUid])
+
   const activeBookings = bookings.filter(
     (booking) => !["Completed", "Declined", "Cancelled"].includes(String(booking.status || "")),
   )
   const pendingBookings = activeBookings.filter((booking) => booking.status === "Pending")
-  const paidBookings = bookings.filter(
-    (booking) => String(booking.paymentStatus || "").toLowerCase() === "paid",
-  )
+  const paidBookings = bookings.filter((booking) => getPaidAmount(booking) > 0)
   const paidRevenue = paidBookings.reduce((total, booking) => total + getPaidAmount(booking), 0)
 
   const monthlyRevenue = useMemo(() => {
@@ -116,7 +147,15 @@ export default function AdminOverview({
     { label: "Rooms", value: rooms.length.toLocaleString(), detail: "Your room listings", icon: BedDouble },
     { label: "Active bookings", value: activeBookings.length.toLocaleString(), detail: "Pending or approved", icon: CalendarCheck },
     { label: "Pending requests", value: pendingBookings.length.toLocaleString(), detail: "Awaiting your review", icon: Clock3 },
-    { label: "Paid revenue", value: formatMoney(paidRevenue), detail: `${paidBookings.length} paid bookings`, icon: Banknote },
+    { label: "Payments received", value: formatMoney(paidRevenue), detail: `${paidBookings.length} bookings with payments`, icon: Banknote },
+    ...(ownerUid && canViewInventory ? [{
+      label: "Inventory",
+      value: inventoryItems.filter((item) => item.isArchived !== true).length.toLocaleString(),
+      detail: inventoryError
+        ? "Inventory summary unavailable"
+        : `${inventoryItems.filter((item) => item.isArchived !== true && isLowStock(item)).length} low-stock alerts`,
+      icon: inventoryItems.some((item) => item.isArchived !== true && isLowStock(item)) ? AlertTriangle : Package,
+    }] : []),
   ]
 
   return (
@@ -151,23 +190,36 @@ export default function AdminOverview({
         </p>
       ) : null}
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {metrics.map(({ label, value, detail, icon: Icon }) => (
-          <article key={label} className="rounded-xl border border-border bg-card p-5 shadow-sm">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">{label}</p>
-                <p className="mt-2 text-2xl font-bold text-foreground">
-                  {label === "Rooms" && roomsLoading ? "…" : loading && label !== "Rooms" ? "…" : value}
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
-              </div>
-              <span className="rounded-lg bg-primary/10 p-2.5 text-primary">
-                <Icon className="h-5 w-5" aria-hidden="true" />
-              </span>
-            </div>
-          </article>
-        ))}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        {metrics.map(({ label, value, detail, icon: Icon }) => {
+          const Wrapper = label === "Inventory" ? "button" : "div"
+          const displayValue = label === "Rooms" && roomsLoading
+            ? "…"
+            : label === "Inventory" && inventoryLoading
+              ? "…"
+              : loading && label !== "Rooms" && label !== "Inventory"
+                ? "…"
+                : value
+          return (
+            <article key={label} className="rounded-xl border border-border bg-card shadow-sm">
+              <Wrapper
+                {...(label === "Inventory" ? { type: "button", onClick: onOpenInventory } : {})}
+                className={`w-full rounded-xl p-5 text-left ${label === "Inventory" ? "transition hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" : ""}`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground">{label}</p>
+                    <p className="mt-2 text-2xl font-bold text-foreground">{displayValue}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
+                  </div>
+                  <span className="rounded-lg bg-primary/10 p-2.5 text-primary">
+                    <Icon className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                </div>
+              </Wrapper>
+            </article>
+          )
+        })}
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.2fr_1fr]">
@@ -181,7 +233,7 @@ export default function AdminOverview({
           ) : error ? (
             <p className="py-12 text-center text-sm text-muted-foreground">Revenue is unavailable until bookings load.</p>
           ) : (
-            <div className="flex h-48 items-end gap-3 border-b border-border px-2" role="img" aria-label="Monthly paid revenue for the last six months">
+            <div className="flex h-48 items-end gap-3 border-b border-border px-2" role="img" aria-label="Monthly payments received for the last six months">
               {monthlyRevenue.map((month) => {
                 const height = maxMonthlyRevenue > 0 ? Math.max(6, (month.amount / maxMonthlyRevenue) * 100) : 0
                 return (

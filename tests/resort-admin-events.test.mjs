@@ -3,7 +3,12 @@ import test from "node:test"
 import {
   buildResortAdminNotification,
   buildResortAuditRecord,
+  writeResortAdminAudit,
+  writeResortAdminNotification,
 } from "../lib/resort-admin-events.mjs"
+import {
+  getResortNotificationPolicy,
+} from "../lib/resort-notification-policy.mjs"
 import { isLowStock, validateInventoryItem } from "../lib/inventory-domain.mjs"
 import {
   getInspectionFindings,
@@ -21,18 +26,21 @@ test("resort payment settings merge root and legacy fields independently", () =>
     {
       gcashQrImage: "data:image/png;base64,qr",
       paymentInstructions: "Use the resort name as reference.",
+      reservationDepositPercent: 30,
     },
   )
   assert.deepEqual(
     resolveResortPaymentSettings({}, {}),
-    { gcashQrImage: "", paymentInstructions: "" },
+    { gcashQrImage: "", paymentInstructions: "", reservationDepositPercent: 30 },
   )
+  assert.equal(resolveResortPaymentSettings({ reservationDepositPercent: 45 }).reservationDepositPercent, 45)
+  assert.equal(resolveResortPaymentSettings({ reservationDepositPercent: 101 }).reservationDepositPercent, 30)
   assert.deepEqual(
     resolveResortPaymentSettings(
       { gcashQrImage: "", paymentInstructions: "" },
       { gcashQrUrl: "legacy-qr", instructions: "Legacy instructions" },
     ),
-    { gcashQrImage: "legacy-qr", paymentInstructions: "Legacy instructions" },
+    { gcashQrImage: "legacy-qr", paymentInstructions: "Legacy instructions", reservationDepositPercent: 30 },
   )
 })
 
@@ -158,4 +166,83 @@ test("event records validate identifiers and bounded display text", () => {
     }).title.length,
     100,
   )
+})
+
+test("notification policies route transactions to the assigned resort roles", () => {
+  assert.deepEqual(getResortNotificationPolicy("booking.status-updated", "booking").roles, ["admin", "front-desk"])
+  assert.deepEqual(getResortNotificationPolicy("payment.received", "booking").roles, ["admin", "finance"])
+  assert.deepEqual(getResortNotificationPolicy("contact.status", "contact-message").roles, ["admin", "front-desk"])
+  assert.deepEqual(getResortNotificationPolicy("item-mark-claimed", "lost-found-item").roles, ["admin", "front-desk"])
+  assert.deepEqual(getResortNotificationPolicy("item.create", "room-inventory-item").roles, ["admin"])
+  assert.equal(getResortNotificationPolicy("platform.application-approved", "platform"), null)
+})
+
+test("direct resort notifications inherit role audiences and queue only valid guest emails", () => {
+  const writes = []
+  let nextId = 0
+  const makeCollection = (path) => ({
+    doc(id = `generated-${++nextId}`) {
+      const ref = {
+        id,
+        path: `${path}/${id}`,
+        collection(name) {
+          return makeCollection(`${path}/${id}/${name}`)
+        },
+      }
+      return ref
+    },
+  })
+  const db = { collection: (name) => makeCollection(name) }
+  const transaction = { create: (ref, data) => writes.push({ path: ref.path, data }) }
+
+  writeResortAdminNotification(transaction, db, {
+    ownerUid: "resort-a",
+    action: "payment.received",
+    type: "payment.received",
+    title: "Payment received",
+    message: "A payment was recorded.",
+    entityType: "booking",
+    customerEmails: ["guest@example.com", "not-an-email"],
+  })
+
+  const notification = writes.find(({ path }) => path.includes("adminNotifications"))
+  const outbox = writes.find(({ path }) => path.startsWith("resortNotificationOutbox/"))
+  assert.deepEqual(notification.data.audienceRoles, ["admin", "finance"])
+  assert.deepEqual(outbox.data.audienceRoles, ["admin", "finance"])
+  assert.deepEqual(outbox.data.customerEmails, ["guest@example.com"])
+})
+
+test("audited resort transactions queue guest emails without storing them in audit data", () => {
+  const writes = []
+  let nextId = 0
+  const makeCollection = (path) => ({
+    doc(id = `generated-${++nextId}`) {
+      return {
+        id,
+        path: `${path}/${id}`,
+        collection(name) {
+          return makeCollection(`${path}/${id}/${name}`)
+        },
+      }
+    },
+  })
+  const db = { collection: (name) => makeCollection(name) }
+  const transaction = { create: (ref, data) => writes.push({ path: ref.path, data }) }
+
+  writeResortAdminAudit(transaction, db, {
+    ownerUid: "resort-a",
+    actorUid: "staff-1",
+    actorEmail: "staff@example.com",
+    actorRole: "admin",
+    action: "booking.status-updated",
+    entityType: "booking",
+    entityId: "booking-1",
+    summary: "Booking approved.",
+    emailRecipients: ["guest@example.com"],
+  })
+
+  const audit = writes.find(({ path }) => path.includes("auditLogs"))
+  const outbox = writes.find(({ path }) => path.startsWith("resortNotificationOutbox/"))
+  assert.equal("emailRecipients" in audit.data, false)
+  assert.deepEqual(outbox.data.customerEmails, ["guest@example.com"])
 })

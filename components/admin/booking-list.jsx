@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 import { bookingAdminRequest } from "@/lib/booking-admin-client"
+import { getOutstandingPaymentBalance, getRecordedPaymentAmount } from "@/lib/payment-domain.mjs"
 import SearchField from "@/components/admin/search-field"
 
 function formatDate(value) {
@@ -141,11 +142,34 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
   }
 
   const updateStayStatus = async (booking, action) => {
+    let paymentMethod
+    const balanceDue = getOutstandingPaymentBalance(booking)
+    if (action === "check-in" && balanceDue > 0) {
+      if (typeof window === "undefined") return
+      const depositDue = Math.max(
+        0,
+        Number(booking.reservationDepositAmount ?? booking.totalPrice ?? 0) - getRecordedPaymentAmount(booking),
+      )
+      if (depositDue > 0) {
+        toast.error("Verify or record the reservation deposit before check-in.")
+        return
+      }
+      const method = window.prompt(
+        `Collect the remaining balance of ${formatMoney(balanceDue)} before check-in. Enter cash or gcash:`,
+        "cash",
+      )
+      if (method === null) return
+      paymentMethod = method.trim().toLowerCase()
+      if (!["cash", "gcash"].includes(paymentMethod)) {
+        toast.error("Enter cash or gcash to record the check-in balance.")
+        return
+      }
+    }
     setBusyBookingId(booking.id)
     try {
       const result = await bookingAdminRequest("/api/booking/stay-status", {
         method: "POST",
-        body: JSON.stringify({ bookingId: booking.id, action }),
+        body: JSON.stringify({ bookingId: booking.id, action, paymentMethod }),
       })
       setBookings((current) =>
         current.map((item) =>
@@ -154,11 +178,18 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
                 ...item,
                 stayStatus: result.stayStatus,
                 ...(action === "check-in" ? { checkedInAt: result.timestamp } : { checkedOutAt: result.timestamp }),
+                paymentStatus: result.paymentStatus,
+                paymentAmount: result.paymentAmount,
+                paymentMethod: result.paymentMethod || item.paymentMethod,
               }
             : item,
         ),
       )
-      toast.success(action === "check-in" ? "Guest checked in." : "Guest checked out.")
+      toast.success(action === "check-in"
+        ? result.balancePaid > 0
+          ? `Balance of ${formatMoney(result.balancePaid)} recorded; guest checked in.`
+          : "Guest checked in."
+        : "Guest checked out.")
     } catch (updateError) {
       console.error("Failed to update guest stay status:", updateError)
       toast.error(updateError.message || "Check-in/check-out could not be updated.")
@@ -202,24 +233,19 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
 
   const updatePaymentStatus = async (booking, action) => {
     setBusyBookingId(booking.id)
-    const paymentStatus = action === "mark-as-paid" ? "paid" : "rejected"
     try {
-      await bookingAdminRequest("/api/booking/update-payment-status", {
+      const result = await bookingAdminRequest("/api/booking/update-payment-status", {
         method: "POST",
         body: JSON.stringify({ bookingId: booking.id, action }),
       })
       setBookings((current) =>
-        current.map((item) => (item.id === booking.id ? { ...item, paymentStatus } : item)),
+        current.map((item) => (item.id === booking.id
+          ? { ...item, paymentStatus: result.paymentStatus, paymentAmount: result.paymentAmount }
+          : item)),
       )
-      try {
-        await bookingAdminRequest("/api/booking/send-status-email", {
-          method: "POST",
-          body: JSON.stringify({ bookingId: booking.id, type: "payment" }),
-        })
-        toast.success(`Payment ${paymentStatus === "paid" ? "verified" : "rejected"} and guest notified.`)
-      } catch (emailError) {
-        toast.error(`Payment updated, but email failed: ${emailError.message}`)
-      }
+      toast.success(action === "mark-as-paid"
+        ? "Reservation deposit verified; guest notification is queued."
+        : "Payment proof rejected; guest notification is queued.")
     } catch (updateError) {
       console.error("Failed to update payment status:", updateError)
       toast.error(updateError.message || "Payment status could not be updated.")
@@ -304,7 +330,15 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
                 <div><dt className="text-muted-foreground">Check-out</dt><dd className="font-medium text-foreground">{formatDate(booking.checkOut)}</dd></div>
                 <div><dt className="text-muted-foreground">Guests</dt><dd className="font-medium text-foreground">{booking.guests || 1}</dd></div>
                 <div><dt className="text-muted-foreground">Total</dt><dd className="font-medium text-foreground">{formatMoney(booking.totalPrice)}</dd></div>
-                <div><dt className="text-muted-foreground">Payment</dt><dd className="font-medium text-foreground">{booking.paymentStatus || "unpaid"}</dd></div>
+                <div>
+                  <dt className="text-muted-foreground">Payment</dt>
+                  <dd className="font-medium capitalize text-foreground">
+                    {(booking.paymentStatus || "unpaid").replaceAll("_", " ")} · {formatMoney(getRecordedPaymentAmount(booking))} paid
+                  </dd>
+                  {getOutstandingPaymentBalance(booking) > 0 ? (
+                    <dd className="text-xs text-amber-700">{formatMoney(getOutstandingPaymentBalance(booking))} due at check-in</dd>
+                  ) : null}
+                </div>
                 <div><dt className="text-muted-foreground">Stay status</dt><dd className="font-medium capitalize text-foreground">{(booking.stayStatus || "not_checked_in").replaceAll("_", " ")}</dd></div>
                 <div><dt className="text-muted-foreground">Requested</dt><dd className="font-medium text-foreground">{formatDate(booking.createdAt)}</dd></div>
                 {booking.checkedInAt ? <div><dt className="text-muted-foreground">Checked in</dt><dd className="font-medium text-foreground">{formatTimestamp(booking.checkedInAt)}</dd></div> : null}
@@ -369,7 +403,7 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
                       disabled={busyBookingId === booking.id}
                       onClick={() => updatePaymentStatus(booking, "mark-as-paid")}
                       className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-60"
-                    >Mark as paid</button>
+                    >Verify reservation deposit</button>
                     <button
                       type="button"
                       disabled={busyBookingId === booking.id}
@@ -378,7 +412,7 @@ export default function BookingList({ isLegacyHelpdesk, ownerUid, invoiceBusines
                     >Reject payment</button>
                   </>
                 ) : null}
-                {!history && ["paid", "rejected"].includes(booking.paymentStatus) ? (
+                {!history && ["paid", "partially_paid", "rejected"].includes(booking.paymentStatus) ? (
                   <button
                     type="button"
                     disabled={busyBookingId === booking.id}

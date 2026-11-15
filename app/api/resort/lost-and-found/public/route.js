@@ -1,12 +1,10 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { getBookingDb, jsonFailure } from "@/lib/booking-api-server"
 import {
-  escapeLostFoundHtml,
   isVerifiedLostItemBooking,
   validateLostItemClaim,
 } from "@/lib/lost-and-found.mjs"
 import { writeResortAdminNotification } from "@/lib/resort-admin-events.mjs"
-import { getLostFoundStaffInboxEmail, sendLostFoundEmail } from "@/lib/lost-found-mail"
 
 const MAX_PUBLIC_ITEMS = 50
 
@@ -181,8 +179,6 @@ export async function POST(request) {
   const firstMessageRef = claimRef.collection("messages").doc()
   const accessToken = randomBytes(32).toString("base64url")
   let pickupLocation = "Front Desk"
-  let itemDescription = "found item"
-  let itemLocation = ""
   try {
     await db.runTransaction(async (transaction) => {
       const bookingRef = db.collection("guestbooking").doc(body.claim.reservationId)
@@ -212,8 +208,6 @@ export async function POST(request) {
       }
 
       pickupLocation = String(itemSnapshot.get("pickupLocation") || "Front Desk")
-      itemDescription = String(itemSnapshot.get("description") || itemDescription)
-      itemLocation = String(itemSnapshot.get("location") || "")
       transaction.create(claimRef, {
         name: body.claim.name.trim(),
         email: body.claim.email.trim().toLowerCase(),
@@ -249,30 +243,16 @@ export async function POST(request) {
         message: `${body.claim.name.trim()} submitted a verified-stay claim for ${String(itemSnapshot.get("description") || "a found item").slice(0, 140)}.`,
         entityType: "lost-found-claim",
         entityId: claimRef.id,
+        customerEmails: [body.claim.email],
       })
     })
 
-    let emailSent = false
-    const staffEmail = await getLostFoundStaffInboxEmail(db, ownerUid)
-    if (staffEmail) {
-      const guestName = escapeLostFoundHtml(body.claim.name)
-      const safeItem = escapeLostFoundHtml(body.claim.message || "Guest submitted a verified lost-item claim.")
-      emailSent = await sendLostFoundEmail({
-        to: staffEmail,
-        subject: `New verified claim: ${itemDescription}`,
-        replyTo: body.claim.email,
-        text: `A verified guest submitted a claim for: ${itemDescription}\nFound at: ${itemLocation}\nGuest: ${body.claim.name}\nBooking reference: ${body.claim.reservationId}\nStay: ${body.claim.checkIn} to ${body.claim.checkOut}\nGuest message: ${body.claim.message || "(none)"}\nOpen the resort admin Lost and Found page to review and reply.`,
-        html: `<p>A verified guest submitted a claim for <strong>${escapeLostFoundHtml(itemDescription)}</strong>.</p><p><strong>Found at:</strong> ${escapeLostFoundHtml(itemLocation)}<br><strong>Guest:</strong> ${guestName}<br><strong>Booking reference:</strong> ${escapeLostFoundHtml(body.claim.reservationId)}<br><strong>Stay:</strong> ${escapeLostFoundHtml(body.claim.checkIn)} to ${escapeLostFoundHtml(body.claim.checkOut)}</p><p><strong>Guest message:</strong><br>${safeItem}</p><p>Open the resort admin Lost and Found page to review and reply.</p>`,
-      })
-    }
     return Response.json({
       success: true,
       claimId: claimRef.id,
       token: accessToken,
-      emailSent,
-      message: emailSent
-        ? `Your completed stay was verified and your claim was emailed to resort staff. Please collect the item from ${pickupLocation} only after staff confirms.`
-        : `Your verified claim is saved in the resort staff Lost and Found inbox, but the staff email alert could not be sent. Please contact the front desk if urgent. Pickup point: ${pickupLocation}.`,
+      emailQueued: true,
+      message: `Your completed stay was verified and your claim was saved. An email update is queued. Please collect the item from ${pickupLocation} only after staff confirms.`,
     })
   } catch (error) {
     console.error("Failed to submit public lost-item claim:", error)

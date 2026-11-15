@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { doc, onSnapshot, serverTimestamp, updateDoc } from "firebase/firestore"
+import { doc, onSnapshot } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import {
   MAX_GCASH_QR_DATA_URL_CHARS,
@@ -9,11 +9,14 @@ import {
 } from "@/lib/data-url-files"
 import { toast } from "sonner"
 import ManagePayments from "@/components/admin/manage-payments"
+import { resortAdminRequest } from "@/lib/admin-api-client"
+import { resolveResortPaymentSettings } from "@/lib/resort-payment-settings.mjs"
 
 export default function PaymentSettings({ tenantOwnerUid, isLegacyHelpdesk, staffRole = "owner" }) {
   const [ownerApproved, setOwnerApproved] = useState(false)
   const [qrImage, setQrImage] = useState("")
   const [instructions, setInstructions] = useState("")
+  const [reservationDepositPercent, setReservationDepositPercent] = useState(30)
   const [rootSettingsLoaded, setRootSettingsLoaded] = useState(false)
   const [legacySettingsLoaded, setLegacySettingsLoaded] = useState(false)
   const [qrUploading, setQrUploading] = useState(false)
@@ -22,23 +25,28 @@ export default function PaymentSettings({ tenantOwnerUid, isLegacyHelpdesk, staf
   useEffect(() => {
     if (!db || !tenantOwnerUid || isLegacyHelpdesk || staffRole !== "owner") return undefined
 
-    let rootSettingsExist = false
+    let owner = {}
+    let legacy = {}
+    let ownerSnapshotLoaded = false
+    let legacySnapshotLoaded = false
+    const syncSettings = () => {
+      if (!ownerSnapshotLoaded || !legacySnapshotLoaded) return
+      const settings = resolveResortPaymentSettings(owner, legacy)
+      setQrImage(settings.gcashQrImage)
+      setInstructions(settings.paymentInstructions)
+      setReservationDepositPercent(settings.reservationDepositPercent)
+      setRootSettingsLoaded(true)
+      setLegacySettingsLoaded(true)
+    }
     const ownerRef = doc(db, "resortOwners", tenantOwnerUid)
     const legacyPaymentRef = doc(db, "resortOwners", tenantOwnerUid, "site", "payment")
     const unsubscribeOwner = onSnapshot(
       ownerRef,
       (snapshot) => {
-        const owner = snapshot.data() || {}
+        owner = snapshot.data() || {}
         setOwnerApproved(String(owner.status || "").trim().toLowerCase() === "approved")
-        rootSettingsExist =
-          Object.prototype.hasOwnProperty.call(owner, "gcashQrImage") ||
-          Object.prototype.hasOwnProperty.call(owner, "paymentInstructions")
-        setRootSettingsLoaded(true)
-        if (rootSettingsExist) {
-          setLegacySettingsLoaded(true)
-          setQrImage(String(owner.gcashQrImage || "").trim())
-          setInstructions(String(owner.paymentInstructions || "").trim())
-        }
+        ownerSnapshotLoaded = true
+        syncSettings()
       },
       (error) => {
         console.error("Failed to load payment settings:", error)
@@ -48,15 +56,14 @@ export default function PaymentSettings({ tenantOwnerUid, isLegacyHelpdesk, staf
     const unsubscribeLegacy = onSnapshot(
       legacyPaymentRef,
       (snapshot) => {
-        if (rootSettingsExist) return
-        const legacy = snapshot.exists() ? snapshot.data() : {}
-        setQrImage(String(legacy.gcashQrUrl || "").trim())
-        setInstructions(String(legacy.instructions || "").trim())
-        setLegacySettingsLoaded(true)
+        legacy = snapshot.exists() ? snapshot.data() : {}
+        legacySnapshotLoaded = true
+        syncSettings()
       },
       (error) => {
         console.error("Failed to load legacy payment settings:", error)
-        setLegacySettingsLoaded(true)
+        legacySnapshotLoaded = true
+        syncSettings()
       },
     )
 
@@ -82,15 +89,28 @@ export default function PaymentSettings({ tenantOwnerUid, isLegacyHelpdesk, staf
       toast.error("Your resort must be approved before changing payment settings.")
       return false
     }
+    const depositPercent = Number(updates.reservationDepositPercent ?? reservationDepositPercent)
+    if (!Number.isInteger(depositPercent) || depositPercent < 1 || depositPercent > 100) {
+      toast.error("Reservation deposit percentage must be a whole number from 1 to 100.")
+      return false
+    }
     setSaving(true)
     try {
-      await updateDoc(doc(db, "resortOwners", tenantOwnerUid), {
-        gcashQrImage: qrImage,
-        paymentInstructions: instructions,
-        ...updates,
-        updatedAt: serverTimestamp(),
+      await resortAdminRequest("/api/resort/admin-mutations", {
+        action: "payment-settings.update",
+        updates: {
+          gcashQrImage: updates.gcashQrImage ?? qrImage,
+          paymentInstructions: updates.paymentInstructions ?? instructions,
+          reservationDepositPercent: depositPercent,
+        },
       })
-      toast.success(updates.gcashQrImage ? "GCash QR code saved." : "Payment instructions saved.")
+      toast.success(
+        updates.gcashQrImage
+          ? "GCash QR code saved."
+          : updates.reservationDepositPercent !== undefined
+            ? "Reservation deposit percentage saved."
+            : "Payment instructions saved.",
+      )
       return true
     } catch (error) {
       console.error("Failed to save payment settings:", error)
@@ -133,8 +153,8 @@ export default function PaymentSettings({ tenantOwnerUid, isLegacyHelpdesk, staf
     <div>
       <h1 className="mb-2 text-3xl font-bold text-foreground">Payments</h1>
       <p className="mb-8 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-        Accept payments manually through GCash. Guests upload payment proof and one valid ID before email OTP
-        confirmation; review guest payments and record cash in Payment management below.
+        Set the reservation deposit percentage and collect the remaining balance at check-in. Guests pay by GCash
+        and upload the deposit proof plus one valid ID; staff can record the balance as cash or GCash when checking in.
       </p>
 
       <div className="max-w-3xl space-y-6 rounded-2xl border border-[#eee2d5] bg-white p-6 shadow-sm">
@@ -176,6 +196,48 @@ export default function PaymentSettings({ tenantOwnerUid, isLegacyHelpdesk, staf
         </div>
 
         <div className="space-y-3 border-t border-border pt-4">
+          <label htmlFor="reservation-deposit-percent" className="block text-sm font-semibold text-foreground">
+            Reservation deposit percentage
+          </label>
+          <p className="text-sm text-muted-foreground">
+            Guests pay this percentage when booking. The remaining balance is collected and recorded during check-in.
+          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              id="reservation-deposit-percent"
+              type="number"
+              min="1"
+              max="100"
+              step="1"
+              required
+              value={reservationDepositPercent}
+              onChange={(event) => setReservationDepositPercent(event.target.value === "" ? "" : Number(event.target.value))}
+              disabled={!ownerApproved}
+              className="w-28 rounded-lg border border-border bg-background px-4 py-2 text-foreground"
+            />
+            <span className="text-sm text-muted-foreground">%</span>
+            <button
+              type="button"
+              onClick={() => savePaymentSettings({ reservationDepositPercent: Number(reservationDepositPercent) }, setInstructionsSaving)}
+              disabled={
+                instructionsSaving ||
+                qrUploading ||
+                !ownerApproved ||
+                !rootSettingsLoaded ||
+                !legacySettingsLoaded ||
+                !Number.isInteger(Number(reservationDepositPercent)) ||
+                Number(reservationDepositPercent) < 1 ||
+                Number(reservationDepositPercent) > 100
+              }
+              className="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {instructionsSaving ? "Saving…" : "Save deposit percentage"}
+            </button>
+          </div>
+          <p className="text-xs text-muted-foreground">Default is 30%. Enter a whole number from 1 to 100.</p>
+        </div>
+
+        <div className="space-y-3 border-t border-border pt-4">
           <label htmlFor="payment-instructions" className="block text-sm font-semibold text-foreground">
             Payment instructions (optional)
           </label>
@@ -187,7 +249,7 @@ export default function PaymentSettings({ tenantOwnerUid, isLegacyHelpdesk, staf
             maxLength={1000}
             disabled={!ownerApproved}
             className="w-full rounded-lg border border-border bg-background px-4 py-2 text-foreground"
-            placeholder="Send screenshot of payment + 1 valid ID. Processing time: 5-15 minutes."
+            placeholder="Send screenshot of reservation deposit + 1 valid ID. Processing time: 5-15 minutes."
           />
           <button
             type="button"

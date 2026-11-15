@@ -175,6 +175,7 @@ export async function POST(request) {
         ...event,
         action: "booking.walk-in-created",
         summary: "A paid cash walk-in booking was created.",
+        emailRecipients: email ? [email] : [],
         after: {
           bookingStatus: "Approved",
           paymentStatus: "paid",
@@ -184,15 +185,10 @@ export async function POST(request) {
       })
       writeResortAdminNotification(transaction, db, {
         ...event,
-        type: "booking.new",
-        title: "New walk-in booking",
-        message: `A paid walk-in booking was created for ${roomType}.`,
-      })
-      writeResortAdminNotification(transaction, db, {
-        ...event,
         type: "payment.received",
         title: "Payment received",
-        message: `Cash payment was recorded for a walk-in booking.`,
+        message: `Cash payment of PHP ${totalPrice.toLocaleString("en-PH")} was recorded for walk-in booking ${bookingRef.id}.`,
+        customerEmails: email ? [email] : [],
       })
     })
 

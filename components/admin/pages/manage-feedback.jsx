@@ -1,9 +1,11 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from "firebase/firestore"
+import { collection, doc, onSnapshot, query, where } from "firebase/firestore"
 import { toast } from "sonner"
 import { db } from "@/lib/firebase"
+import { resortAdminRequest } from "@/lib/admin-api-client"
+import SearchField from "@/components/admin/search-field"
 
 function formatCreatedAt(timestamp) {
   const date = timestamp?.toDate?.()
@@ -15,6 +17,7 @@ export default function ManageFeedback({ isLegacyHelpdesk, ownerUid }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [updatingId, setUpdatingId] = useState("")
+  const [search, setSearch] = useState("")
 
   useEffect(() => {
     if (!db || (!isLegacyHelpdesk && !ownerUid)) {
@@ -52,12 +55,18 @@ export default function ManageFeedback({ isLegacyHelpdesk, ownerUid }) {
     )
   }, [isLegacyHelpdesk, ownerUid])
 
+  const filteredFeedback = feedbackItems.filter((feedback) =>
+    [feedback.name, feedback.email, feedback.message, feedback.status, feedback.rating]
+      .some((value) => String(value ?? "").toLowerCase().includes(search.trim().toLowerCase())),
+  )
+
   const handleVisibilityChange = async (feedbackId, status) => {
     setUpdatingId(feedbackId)
     try {
-      await updateDoc(doc(db, "feedbacks", feedbackId), {
+      await resortAdminRequest("/api/resort/admin-mutations", {
+        action: "feedback.status",
+        entityId: feedbackId,
         status,
-        updatedAt: serverTimestamp(),
       })
       toast.success(status === "Published" ? "Feedback published." : "Feedback hidden.")
     } catch (updateError) {
@@ -75,15 +84,19 @@ export default function ManageFeedback({ isLegacyHelpdesk, ownerUid }) {
         <p className="mt-1 text-sm text-muted-foreground">Choose which guest reviews appear on your resort site.</p>
       </div>
 
+      <SearchField value={search} onChange={setSearch} placeholder="Search guest, email, or review" />
+
       {loading ? (
         <p className="text-sm text-muted-foreground" role="status">Loading feedback…</p>
       ) : error ? (
         <p className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700" role="alert">{error}</p>
       ) : feedbackItems.length === 0 ? (
         <p className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">No feedback yet.</p>
+      ) : filteredFeedback.length === 0 ? (
+        <p className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">No feedback matches “{search}”.</p>
       ) : (
         <div className="space-y-4">
-          {feedbackItems.map((feedback) => {
+          {filteredFeedback.map((feedback) => {
             const published = String(feedback.status || "").toLowerCase() === "published"
             return (
               <article key={feedback.id} className="rounded-xl border border-border bg-card p-5 shadow-sm">
@@ -92,6 +105,11 @@ export default function ManageFeedback({ isLegacyHelpdesk, ownerUid }) {
                     <h2 className="font-semibold text-foreground">{feedback.name || "Guest"}</h2>
                     <p className="text-sm text-muted-foreground">{feedback.email || "No email provided"}</p>
                     <p className="mt-1 text-xs text-muted-foreground">{formatCreatedAt(feedback.createdAt)}</p>
+                    {feedback.bookingId ? (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Booking {feedback.bookingId} · {feedback.checkIn || "—"} to {feedback.checkOut || "—"}
+                      </p>
+                    ) : null}
                   </div>
                   <span className={`w-fit rounded-full px-3 py-1 text-xs font-medium ${published ? "bg-emerald-100 text-emerald-800" : "bg-muted text-muted-foreground"}`}>
                     {published ? "Published" : "Hidden"}

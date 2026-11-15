@@ -7,6 +7,10 @@ import {
   getStaffInvitationIndexError,
   jsonFailure,
 } from "@/lib/booking-api-server"
+import {
+  writeResortAdminEvent,
+  writeResortAdminAudit,
+} from "@/lib/resort-admin-events.mjs"
 
 const STAFF_ROLES = new Set(["admin", "front-desk", "finance"])
 const EMAIL_PATTERN = /^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/
@@ -172,18 +176,45 @@ export async function POST(request) {
 
       const staffName = name || staffUser.displayName || ""
       try {
-        await invitationRef.set({
-          email,
-          uid: staffUser.uid,
-          name: staffName,
-          contact,
-          ownerUid,
-          role,
-          status: "pending",
-          active: false,
-          createdAt: new Date(),
-          createdBy: authResult.user.uid,
-          updatedAt: new Date(),
+        await db.runTransaction(async (transaction) => {
+          const current = await transaction.get(invitationRef)
+          if (current.exists) {
+            const currentData = current.data()
+            if (isPendingInvitation(currentData) || isApprovedStaffInvitation(currentData)) {
+              const error = new Error("This email already has a pending or approved staff record.")
+              error.status = 409
+              throw error
+            }
+          }
+          transaction.set(invitationRef, {
+            email,
+            uid: staffUser.uid,
+            name: staffName,
+            contact,
+            ownerUid,
+            role,
+            status: "pending",
+            active: false,
+            createdAt: new Date(),
+            createdBy: authResult.user.uid,
+            updatedAt: new Date(),
+          }, { merge: true })
+          writeResortAdminEvent(transaction, db, {
+            ownerUid,
+            actorUid: authResult.user.uid,
+            actorEmail: authResult.user.email,
+            actorRole: authResult.user.staffRole,
+            action: "staff.invited",
+            entityType: "staff",
+            entityId: staffUser.uid,
+            summary: `A new ${getRoleLabel(role)} staff account is pending approval.`,
+            after: { role, status: "pending" },
+            notification: {
+              type: "staff.pending-approval",
+              title: "Staff approval needed",
+              message: `${staffName || getRoleLabel(role)} is waiting for approval as ${getRoleLabel(role)}.`,
+            },
+          })
         })
       } catch (error) {
         if (createdAuthUser) {
@@ -208,12 +239,34 @@ export async function POST(request) {
     if (action === "revoke") {
       const invitationSnapshot = await invitationRef.get()
       if (!invitationSnapshot.exists) return jsonFailure("Staff record was not found.", 404)
-      await invitationRef.set({
-        status: "revoked",
-        active: false,
-        updatedAt: new Date(),
-        updatedBy: authResult.user.uid,
-      }, { merge: true })
+      const revokedStaffUid = String(invitationSnapshot.get("uid") || "")
+      await db.runTransaction(async (transaction) => {
+        const current = await transaction.get(invitationRef)
+        if (!current.exists) {
+          const error = new Error("Staff record was not found.")
+          error.status = 404
+          throw error
+        }
+        transaction.set(invitationRef, {
+          status: "revoked",
+          active: false,
+          updatedAt: new Date(),
+          updatedBy: authResult.user.uid,
+        }, { merge: true })
+        writeResortAdminAudit(transaction, db, {
+          ownerUid,
+          actorUid: authResult.user.uid,
+          actorEmail: authResult.user.email,
+          actorRole: authResult.user.staffRole,
+          action: "staff.revoked",
+          entityType: "staff",
+          entityId: revokedStaffUid,
+          summary: "Staff access was revoked.",
+          before: { role: String(current.get("role") || ""), status: String(current.get("status") || "") },
+          after: { status: "revoked" },
+          emailRecipients: [String(current.get("email") || email)],
+        })
+      })
       return Response.json({ success: true, status: "revoked" })
     }
 
@@ -291,6 +344,18 @@ export async function POST(request) {
           message: `Your ${roleLabel} access has been approved. Check your email to set your password and verify your account.`,
           read: false,
           createdAt: new Date(),
+        })
+        writeResortAdminAudit(transaction, db, {
+          ownerUid,
+          actorUid: authResult.user.uid,
+          actorEmail: authResult.user.email,
+          actorRole: authResult.user.staffRole,
+          action: "staff.approved",
+          entityType: "staff",
+          entityId: staffUser.uid,
+          summary: `A ${roleLabel} staff account was approved.`,
+          before: { role: String(latestInvitation.role || ""), status: "pending" },
+          after: { status: "approved" },
         })
       } else if (!isApprovedStaffInvitation(latestInvitation)) {
         const error = new Error("Only pending staff can be approved.")
