@@ -8,26 +8,22 @@ import {
   signOut,
 } from "firebase/auth"
 import {
-  addDoc,
   collection,
-  deleteDoc,
   doc,
   getDoc,
   limit,
   onSnapshot,
   orderBy,
   query,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
   where,
-  deleteField,
 } from "firebase/firestore"
 import {
   BedDouble,
+  ArrowLeft,
   BellRing,
   CalendarCheck,
   CalendarDays,
+  ChevronDown,
   ClipboardList,
   History,
   ChevronsLeft,
@@ -41,8 +37,10 @@ import {
   MessageCircle,
   Moon,
   Paintbrush,
-  Star,
+  Package,
   Search,
+  Settings,
+  Star,
   Sun,
   Upload,
   Wallet,
@@ -58,6 +56,12 @@ import { useMarketplaceSettings } from "@/hooks/use-marketplace-settings"
 import { normalizeOwnerUidFromSearchParam } from "@/lib/booking-tenant"
 import { resortAdminRequest } from "@/lib/admin-api-client"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { compressImageFileToDataUrl } from "@/lib/data-url-files"
+import {
+  MAX_DESTINATION_HIGHLIGHTS,
+  MAX_DESTINATION_HIGHLIGHT_IMAGE_CHARS,
+  MAX_DESTINATION_HIGHLIGHT_IMAGES_TOTAL_CHARS,
+} from "@/lib/resort-highlights.mjs"
 import Cropper from "react-easy-crop"
 import { Toaster } from "@/components/ui/sonner"
 import { Button } from "@/components/ui/button"
@@ -93,13 +97,15 @@ import StaffManagement from "@/components/admin/staff-management"
 import ReminderSettings from "@/components/admin/reminder-settings"
 import AdminNotificationBell from "@/components/admin/admin-notification-bell"
 import AuditLog from "@/components/admin/pages/audit-log"
-import LostAndFound from "@/components/admin/pages/lost-and-found"
+import ManageInventory from "@/components/admin/pages/manage-inventory"
 import RoomItemMonitoring from "@/components/admin/pages/room-item-monitoring"
+import LostAndFound from "@/components/admin/pages/lost-and-found"
 const ALLOWED_ADMINS = ["admin@luxestay.com", "resort.helpdesk01@gmail.com"]
 
 const NAV_ITEMS = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "manage-rooms", label: "Manage Rooms", icon: BedDouble },
+  { key: "manage-inventory", label: "Inventory Management", icon: Package },
   { key: "room-item-monitoring", label: "Room Item Monitoring", icon: ClipboardList },
   { key: "lost-and-found", label: "Lost and Found", icon: Search },
   { key: "manage-bookings", label: "Manage Bookings", icon: CalendarCheck },
@@ -113,6 +119,16 @@ const NAV_ITEMS = [
   { key: "audit-log", label: "Audit Log", icon: ClipboardList },
   { key: "staff-management", label: "Staff Accounts", icon: Users },
 ]
+
+const SETTINGS_NAV_KEYS = new Set([
+  "booking-history",
+  "contact-messages",
+  "manage-feedback",
+  "brand-settings",
+  "reminder-settings",
+  "audit-log",
+  "staff-management",
+])
 
 /** Hero export: smaller file uploads faster; still sharp at typical viewport widths */
 const HERO_EXPORT_W = 1280
@@ -138,6 +154,7 @@ export default function AdminPage({ portalMode }) {
   const [accessMessage, setAccessMessage] = useState("")
   const [sidebarExpanded, setSidebarExpanded] = useState(true)
   const [mobileSidebarVisible, setMobileSidebarVisible] = useState(false)
+  const [settingsExpanded, setSettingsExpanded] = useState(false)
   const [logoutDialogOpen, setLogoutDialogOpen] = useState(false)
   const [brandForm, setBrandForm] = useState(() => ({
     ...BRANDING_DEFAULTS,
@@ -187,15 +204,30 @@ export default function AdminPage({ portalMode }) {
     : null
   const staffRole = adminUser?.staffRole || "owner"
   const staffNavKeys = {
-    admin: ["manage-bookings", "room-item-monitoring", "booking-calendar", "booking-history", "payment-integration", "lost-and-found"],
+    admin: ["manage-bookings", "manage-inventory", "room-item-monitoring", "booking-calendar", "booking-history", "payment-integration", "lost-and-found"],
     "front-desk": ["manage-bookings", "room-item-monitoring", "booking-calendar", "payment-integration", "lost-and-found"],
     finance: ["booking-history", "payment-integration"],
   }
-  const visibleNavItems = isLegacyHelpdesk
-    ? NAV_ITEMS.filter((item) => !["lost-and-found", "audit-log", "room-item-monitoring"].includes(item.key))
-    : staffRole === "owner"
-      ? NAV_ITEMS
-      : NAV_ITEMS.filter((item) => staffNavKeys[staffRole]?.includes(item.key))
+  const visibleNavItems = (isLegacyHelpdesk
+    ? NAV_ITEMS.filter((item) => !["lost-and-found", "audit-log", "manage-inventory", "room-item-monitoring"].includes(item.key))
+    : NAV_ITEMS)
+    .filter((item) => isLegacyHelpdesk || staffRole === "owner" || staffNavKeys[staffRole]?.includes(item.key))
+  const visibleSettingsItems = visibleNavItems.filter((item) => SETTINGS_NAV_KEYS.has(item.key))
+  const visiblePrimaryNavItems = visibleNavItems.filter((item) => !SETTINGS_NAV_KEYS.has(item.key))
+  const isSettingsPageActive = visibleSettingsItems.some((item) => item.key === currentPage)
+  const showSettingsNavigation = settingsExpanded && (mobileSidebarVisible || sidebarExpanded)
+  const defaultPage = staffRole === "owner" || isLegacyHelpdesk
+    ? "dashboard"
+    : staffRole === "finance"
+      ? "payment-integration"
+      : "manage-bookings"
+  const navigateToPage = (page) => {
+    if (SETTINGS_NAV_KEYS.has(page)) setSettingsExpanded(true)
+    setCurrentPage(page)
+  }
+  const handlePageBack = () => {
+    setCurrentPage(defaultPage)
+  }
   const { branding: ownerBrandingSnapshot, updateBranding: updateOwnerBranding } =
     useResortOwnerBranding(tenantOwnerUid)
   const { branding: loginOwnerBranding } = useResortOwnerBranding(loginOwnerUid)
@@ -209,32 +241,32 @@ export default function AdminPage({ portalMode }) {
       return undefined
     }
 
-    const notificationsQuery = query(
-      collection(db, "resortOwners", tenantOwnerUid, "staffNotifications"),
-      where("staffUid", "==", adminUser.uid),
-      limit(20),
-    )
-    return onSnapshot(
-      notificationsQuery,
-      (snapshot) => {
-        const notifications = snapshot.docs
-          .map((item) => ({ id: item.id, ...item.data() }))
-          .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0))
-        setStaffNotifications(notifications)
-      },
-      (error) => {
+    let active = true
+    const loadNotifications = async () => {
+      try {
+        const result = await resortAdminRequest("/api/resort/admin-notifications", undefined, "GET")
+        if (active) setStaffNotifications(Array.isArray(result.notifications) ? result.notifications : [])
+      } catch (error) {
         console.error("Failed to load staff notifications:", error)
-        toast.error("Staff notifications could not be loaded.")
-      },
-    )
+        if (active) toast.error("Staff notifications could not be loaded.")
+      }
+    }
+    void loadNotifications()
+    const timer = window.setInterval(() => void loadNotifications(), 30_000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
   }, [tenantOwnerUid, adminUser?.uid, staffRole])
 
   const markStaffNotificationRead = async (notificationId) => {
     try {
-      await updateDoc(
-        doc(db, "resortOwners", tenantOwnerUid, "staffNotifications", notificationId),
-        { read: true, readAt: new Date() },
-      )
+      await resortAdminRequest("/api/resort/admin-notifications", {
+        action: "mark-read",
+        notificationId,
+      }, "PATCH")
+      const result = await resortAdminRequest("/api/resort/admin-notifications", undefined, "GET")
+      setStaffNotifications(Array.isArray(result.notifications) ? result.notifications : [])
     } catch (error) {
       console.error("Failed to mark staff notification as read:", error)
       toast.error("Notification could not be marked as read.")
@@ -419,7 +451,10 @@ export default function AdminPage({ portalMode }) {
             tagline: resortDesc ? resortDesc.slice(0, 80) : (ownerBrandingSnapshot?.tagline?.trim() || ""),
             aboutBody: resortDesc || (ownerBrandingSnapshot?.aboutBody?.trim() || ""),
           }
-          updateOwnerBranding(patch).catch(() => {})
+          updateOwnerBranding(patch).catch((error) => {
+            console.error("Failed to initialize resort branding:", error)
+            toast.error("Resort branding could not be initialized.")
+          })
           setBrandForm((prev) => ({ ...prev, ...patch }))
         }
         setListingLoading(false)
@@ -461,10 +496,9 @@ export default function AdminPage({ portalMode }) {
         .map((t) => t.trim())
         .filter(Boolean)
         .slice(0, 10)
-      await setDoc(
-        doc(db, "resorts", tenantOwnerUid),
-        {
-          ownerUid: tenantOwnerUid,
+      await resortAdminRequest("/api/resort/admin-mutations", {
+        action: "listing.save",
+        listing: {
           name: String(brandForm.name || "").trim(),
           location: String(listingForm.location || "").trim(),
           mapsUrl: String(listingForm.mapsUrl || "").trim(),
@@ -472,10 +506,8 @@ export default function AdminPage({ portalMode }) {
           category: String(listingForm.category || "Resort").trim() || "Resort",
           listingImage: String(listingForm.listingImage || "").trim(),
           tags,
-          updatedAt: serverTimestamp(),
         },
-        { merge: true },
-      )
+      })
       toast.success("Marketplace listing saved.")
     } catch (e) {
       console.error(e)
@@ -501,11 +533,7 @@ export default function AdminPage({ portalMode }) {
     }
     setPublishing(true)
     try {
-      await setDoc(
-        doc(db, "resorts", tenantOwnerUid),
-        { published: true, publishedAt: serverTimestamp(), updatedAt: serverTimestamp() },
-        { merge: true },
-      )
+      await resortAdminRequest("/api/resort/admin-mutations", { action: "listing.publish" })
       const preview =
         typeof window !== "undefined"
           ? `${window.location.origin}/?o=${encodeURIComponent(tenantOwnerUid)}`
@@ -782,6 +810,44 @@ export default function AdminPage({ portalMode }) {
     setBrandForm((prev) => ({ ...prev, [field]: value }))
   }
 
+  const handleDestinationHighlightUpload = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ""
+    if (!file) return
+
+    const highlights = Array.isArray(brandForm.destinationHighlights) ? brandForm.destinationHighlights : []
+    if (highlights.length >= MAX_DESTINATION_HIGHLIGHTS) {
+      toast.error(`You can add up to ${MAX_DESTINATION_HIGHLIGHTS} destination highlights.`)
+      return
+    }
+
+    try {
+      const image = await compressImageFileToDataUrl(file, {
+        maxWidth: 1400,
+        maxHeight: 1000,
+        quality: 0.76,
+        maxChars: MAX_DESTINATION_HIGHLIGHT_IMAGE_CHARS,
+      })
+      const currentImageChars = highlights.reduce((total, item) => total + String(item.image || "").length, 0)
+      if (currentImageChars + image.length > MAX_DESTINATION_HIGHLIGHT_IMAGES_TOTAL_CHARS) {
+        toast.error("Destination photos exceed the combined upload limit. Remove a photo or choose smaller images.")
+        return
+      }
+
+      setBrandForm((prev) => ({
+        ...prev,
+        destinationHighlights: [
+          ...(Array.isArray(prev.destinationHighlights) ? prev.destinationHighlights : []),
+          { title: "", description: "", image },
+        ],
+      }))
+      toast.success("Photo added. Save changes to publish this destination highlight.")
+    } catch (error) {
+      console.error("Failed to process destination highlight photo:", error)
+      toast.error(error?.message || "Destination photo could not be uploaded.")
+    }
+  }
+
   const readFileAsDataURL = (file) =>
     new Promise((resolve, reject) => {
       const reader = new FileReader()
@@ -935,11 +1001,18 @@ export default function AdminPage({ portalMode }) {
     setBrandSaving(true)
     console.log("handleBrandingSubmit called with brandForm:", brandForm)
     try {
-      const payload =
-        tenantOwnerUid && !isLegacyHelpdesk
-          ? { ...brandForm, tabTitle: deleteField(), favicon: deleteField() }
-          : brandForm
-      await updateBranding(payload)
+      if (tenantOwnerUid && !isLegacyHelpdesk) {
+        const ownerBranding = { ...brandForm }
+        delete ownerBranding.tabTitle
+        delete ownerBranding.favicon
+        await resortAdminRequest("/api/resort/admin-mutations", {
+          action: "branding.update",
+          branding: ownerBranding,
+          removeFields: ["tabTitle", "favicon"],
+        })
+      } else {
+        await updateBranding(brandForm)
+      }
       setBrandSaved(true)
       toast.success("Branding saved successfully to Firebase.")
       setTimeout(() => setBrandSaved(false), 2500)
@@ -1287,13 +1360,13 @@ export default function AdminPage({ portalMode }) {
               ? "overflow-y-auto"
               : "overflow-hidden lg:overflow-hidden"
           }`}>
-            {visibleNavItems.map(({ key, label, icon: Icon }) => {
+            {visiblePrimaryNavItems.map(({ key, label, icon: Icon }) => {
               const isActive = currentPage === key
               return (
                 <button
                   key={key}
                   onClick={() => {
-                    setCurrentPage(key)
+                    navigateToPage(key)
                     setMobileSidebarVisible(false)
                   }}
                   className={`group relative flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold tracking-wide transition-all duration-200 ${
@@ -1324,6 +1397,87 @@ export default function AdminPage({ portalMode }) {
                 </button>
               )
             })}
+            {visibleSettingsItems.length > 0 && (
+              <div>
+                <button
+                  type="button"
+                  aria-expanded={showSettingsNavigation}
+                  aria-controls="admin-settings-navigation"
+                  onClick={() => {
+                    if (!sidebarExpanded && !mobileSidebarVisible) {
+                      setSidebarExpanded(true)
+                      setSettingsExpanded(true)
+                      return
+                    }
+                    setSettingsExpanded((expanded) => !expanded)
+                  }}
+                  className={`group relative flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold tracking-wide transition-all duration-200 ${
+                    theme === "dark"
+                      ? isSettingsPageActive
+                        ? "bg-slate-700 text-white shadow-inner"
+                        : "text-slate-300 hover:bg-slate-700/50 hover:text-white"
+                      : isSettingsPageActive
+                        ? "bg-white/15 text-white shadow-inner shadow-emerald-900/40"
+                        : "text-emerald-100 hover:bg-white/5 hover:text-white"
+                  }`}
+                >
+                  <Settings size={18} className="shrink-0" />
+                  <span
+                    className={`flex-1 truncate text-left transition-all duration-300 ${
+                      (mobileSidebarVisible || sidebarExpanded)
+                        ? "max-w-full opacity-100"
+                        : "max-w-0 opacity-0 lg:max-w-0 lg:opacity-0"
+                    }`}
+                  >
+                    Settings
+                  </span>
+                  {(mobileSidebarVisible || sidebarExpanded) && (
+                    <ChevronDown
+                      size={16}
+                      className={`shrink-0 transition-transform ${
+                        showSettingsNavigation ? "rotate-180" : ""
+                      }`}
+                    />
+                  )}
+                  {!sidebarExpanded && (
+                    <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-3 -translate-y-1/2 whitespace-nowrap rounded-md bg-emerald-900 px-3 py-1.5 text-xs font-semibold text-white opacity-0 shadow-xl transition-all duration-200 group-hover:opacity-100">
+                      Settings
+                    </span>
+                  )}
+                </button>
+                <div
+                  id="admin-settings-navigation"
+                  hidden={!showSettingsNavigation}
+                  className="mt-1 space-y-1 border-l border-white/20 pl-3 ml-5"
+                >
+                  {visibleSettingsItems.map(({ key, label, icon: Icon }) => {
+                    const isActive = currentPage === key
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => {
+                          navigateToPage(key)
+                          setMobileSidebarVisible(false)
+                        }}
+                        className={`group relative flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-xs font-semibold transition-colors ${
+                          theme === "dark"
+                            ? isActive
+                              ? "bg-slate-700 text-white"
+                              : "text-slate-300 hover:bg-slate-700/50 hover:text-white"
+                            : isActive
+                              ? "bg-white/15 text-white"
+                              : "text-emerald-100 hover:bg-white/5 hover:text-white"
+                        }`}
+                      >
+                        <Icon size={16} className="shrink-0" />
+                        <span className="truncate">{label}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
         </nav>
 
           <div className={`border-t transition-all duration-300 ${
@@ -1422,10 +1576,10 @@ export default function AdminPage({ portalMode }) {
             ) : null}
             {!isLegacyHelpdesk ? (
               <AdminNotificationBell
-                onOpenAuditLog={staffRole === "owner" ? () => setCurrentPage("audit-log") : undefined}
+                onOpenAuditLog={staffRole === "owner" ? () => navigateToPage("audit-log") : undefined}
                 onOpenLostAndFound={
                   ["owner", "admin", "front-desk"].includes(staffRole)
-                    ? () => setCurrentPage("lost-and-found")
+                    ? () => navigateToPage("lost-and-found")
                     : undefined
                 }
               />
@@ -1446,6 +1600,19 @@ export default function AdminPage({ portalMode }) {
                 </div>
         </div>
       </div>
+          {currentPage !== defaultPage && (
+            <div className="mb-4">
+              <button
+                type="button"
+                onClick={handlePageBack}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-card text-foreground shadow-sm transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label={defaultPage === "dashboard" ? "Go to Dashboard" : "Return to your home page"}
+                title={defaultPage === "dashboard" ? "Go to Dashboard" : "Return to your home page"}
+              >
+                <ArrowLeft size={16} aria-hidden="true" />
+              </button>
+            </div>
+          )}
           {currentPage === "dashboard" && (
             <AdminOverview
               isLegacyHelpdesk={isLegacyHelpdesk}
@@ -1453,8 +1620,24 @@ export default function AdminPage({ portalMode }) {
               rooms={rooms}
               roomsLoading={roomsLoading}
               roomsError={roomsError}
+              canViewInventory={!isLegacyHelpdesk && (staffRole === "owner" || staffRole === "admin")}
+              onOpenInventory={() => navigateToPage("manage-inventory")}
             />
           )}
+
+          {currentPage === "manage-inventory" && (staffRole === "owner" || staffRole === "admin") && (
+            <ManageInventory />
+          )}
+          {currentPage === "room-item-monitoring"
+            && !isLegacyHelpdesk
+            && ["owner", "admin", "front-desk"].includes(staffRole)
+            && (
+              <RoomItemMonitoring canManageItems={staffRole === "owner" || staffRole === "admin"} />
+            )}
+          {currentPage === "lost-and-found"
+            && !isLegacyHelpdesk
+            && ["owner", "admin", "front-desk"].includes(staffRole)
+            && <LostAndFound />}
 
           {currentPage === "manage-rooms" && (
             <ManageRooms
@@ -1511,14 +1694,10 @@ export default function AdminPage({ portalMode }) {
           )}
 
           {currentPage === "booking-calendar" && <BookingCalendar />}
-          {currentPage === "lost-and-found"
-            && !isLegacyHelpdesk
-            && ["owner", "admin", "front-desk"].includes(staffRole)
-            && <LostAndFound />}
-          {currentPage === "audit-log" && staffRole === "owner" && !isLegacyHelpdesk && <AuditLog />}
           {currentPage === "reminder-settings" && staffRole === "owner" && (
             <ReminderSettings ownerUid={tenantOwnerUid} />
           )}
+          {currentPage === "audit-log" && staffRole === "owner" && !isLegacyHelpdesk && <AuditLog />}
 
           {currentPage === "contact-messages" && (
             <ManageContact isLegacyHelpdesk={isLegacyHelpdesk} ownerUid={tenantOwnerUid} />
@@ -1781,6 +1960,102 @@ export default function AdminPage({ portalMode }) {
                       })}
                     </div>
                   </div>
+
+                  {!isLegacyHelpdesk && tenantOwnerUid && (
+                    <div className="space-y-4 border-t border-border pt-4">
+                      <div className="flex flex-col gap-3 border-b border-border pb-3 sm:flex-row sm:items-end sm:justify-between">
+                        <div>
+                          <h2 className="text-xl font-semibold text-foreground">Destination highlights</h2>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            Upload photos of your resort, nearby attractions, and places guests can visit. These appear in a carousel on your booking page and the marketplace.
+                          </p>
+                        </div>
+                        <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition hover:bg-secondary">
+                          <Upload size={16} aria-hidden />
+                          Add destination photo
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp"
+                            onChange={handleDestinationHighlightUpload}
+                            disabled={(brandForm.destinationHighlights || []).length >= MAX_DESTINATION_HIGHLIGHTS}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+
+                      <p className="text-xs text-muted-foreground">
+                        Up to {MAX_DESTINATION_HIGHLIGHTS} photos. Add a place name and short description, then select Save changes.
+                      </p>
+
+                      {(Array.isArray(brandForm.destinationHighlights) ? brandForm.destinationHighlights : []).length ? (
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          {brandForm.destinationHighlights.map((item, index) => (
+                            <div key={`${index}-${item.title}`} className="overflow-hidden rounded-xl border border-border bg-background">
+                              <div className="relative h-40 bg-secondary">
+                                <img src={item.image} alt={item.title || `Destination highlight ${index + 1}`} className="h-full w-full object-cover" />
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setBrandForm((prev) => ({
+                                      ...prev,
+                                      destinationHighlights: (prev.destinationHighlights || []).filter((_, itemIndex) => itemIndex !== index),
+                                    }))
+                                  }
+                                  className="absolute right-3 top-3 rounded-full bg-slate-950/75 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-700"
+                                  aria-label={`Remove ${item.title || `destination photo ${index + 1}`}`}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                              <div className="space-y-3 p-4">
+                                <div>
+                                  <label className="mb-1.5 block text-sm font-semibold text-foreground">Place or highlight name</label>
+                                  <input
+                                    type="text"
+                                    maxLength={100}
+                                    required
+                                    value={item.title || ""}
+                                    onChange={(event) =>
+                                      setBrandForm((prev) => ({
+                                        ...prev,
+                                        destinationHighlights: (prev.destinationHighlights || []).map((highlight, itemIndex) =>
+                                          itemIndex === index ? { ...highlight, title: event.target.value } : highlight,
+                                        ),
+                                      }))
+                                    }
+                                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                                    placeholder="e.g. Hidden Falls"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="mb-1.5 block text-sm font-semibold text-foreground">Short description</label>
+                                  <textarea
+                                    maxLength={500}
+                                    rows={2}
+                                    value={item.description || ""}
+                                    onChange={(event) =>
+                                      setBrandForm((prev) => ({
+                                        ...prev,
+                                        destinationHighlights: (prev.destinationHighlights || []).map((highlight, itemIndex) =>
+                                          itemIndex === index ? { ...highlight, description: event.target.value } : highlight,
+                                        ),
+                                      }))
+                                    }
+                                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                                    placeholder="Tell guests what makes this place special."
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="rounded-lg border border-dashed border-border bg-secondary/20 px-4 py-8 text-center text-sm text-muted-foreground">
+                          No destination highlights yet. Upload a resort or nearby attraction photo to get started.
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {!isLegacyHelpdesk && tenantOwnerUid && (
                     <div className="space-y-4 pt-4 border-t border-border">

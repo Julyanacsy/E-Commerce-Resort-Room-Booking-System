@@ -18,6 +18,8 @@ export type Branding = {
   aboutBody: string
   /** Up to 3 highlights shown in About section. */
   aboutHighlights: { title: string; desc: string }[]
+  /** Resort-owned destination/attraction photos shown on the public landing page and marketplace. */
+  destinationHighlights?: { title: string; description: string; image: string }[]
   tabTitle: string
   address: string
   phone: string

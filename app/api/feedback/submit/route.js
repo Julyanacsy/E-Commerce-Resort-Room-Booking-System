@@ -1,117 +1,101 @@
-import { NextResponse } from "next/server"
-import { db } from "@/lib/firebase"
-import { collection, addDoc, serverTimestamp } from "firebase/firestore"
+import { FieldValue } from "firebase-admin/firestore"
+import { getBookingDb } from "@/lib/booking-api-server"
 import {
-  resolveCentralEnvMail,
-  resolveAdminInboxEmail,
-  getResortAdminMailDisplayName,
-} from "@/lib/central-env-mail"
-import { normalizeOwnerUid } from "@/lib/booking-tenant"
+  hashBookingFeedbackToken,
+  isFeedbackInviteActive,
+  isValidBookingFeedbackToken,
+  validateGuestFeedback,
+} from "@/lib/booking-feedback.mjs"
+import { writeResortAdminEvent } from "@/lib/resort-admin-events.mjs"
 
 export async function POST(request) {
+  let body
   try {
-    const { name, email, rating, message, ownerUid: rawOwnerUid } = await request.json()
-    const ownerUid = normalizeOwnerUid(rawOwnerUid)
+    body = await request.json()
+  } catch {
+    return Response.json({ error: "Invalid JSON request." }, { status: 400 })
+  }
+  const token = String(body?.token || "")
+  const rating = Number(body?.rating)
+  const message = typeof body?.message === "string" ? body.message.trim() : ""
+  if (!isValidBookingFeedbackToken(token) || !validateGuestFeedback({ rating, message })) {
+    return Response.json({ error: "A valid feedback link, rating, and message are required." }, { status: 400 })
+  }
 
-    if (!name || !email || !message || !rating) {
-      return NextResponse.json(
-        { error: "Name, email, rating, and message are required" },
-        { status: 400 },
-      )
+  try {
+    const db = getBookingDb()
+    if (!db) {
+      return Response.json({ error: "Firebase Admin credentials are not configured." }, { status: 503 })
     }
 
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-    if (!emailRegex.test(email.trim())) {
-      return NextResponse.json({ error: "Invalid email format" }, { status: 400 })
-    }
+    const tokenHash = hashBookingFeedbackToken(token)
+    const tokenRef = db.collection("bookingFeedbackTokens").doc(tokenHash)
+    const feedbackRef = db.collection("feedbacks").doc()
+    const now = new Date()
 
-    const ratingNum = Number.parseInt(rating)
-    if (isNaN(ratingNum) || ratingNum < 1 || ratingNum > 5) {
-      return NextResponse.json({ error: "Rating must be between 1 and 5" }, { status: 400 })
-    }
+    const result = await db.runTransaction(async (transaction) => {
+      const inviteSnapshot = await transaction.get(tokenRef)
+      if (!inviteSnapshot.exists) return { error: "This feedback link is invalid or expired.", status: 410 }
 
-    let feedbackId
-    try {
-      const feedbackRef = collection(db, "feedbacks")
-      const docRef = await addDoc(feedbackRef, {
-        name: name.trim(),
-        email: email.trim().toLowerCase(),
-        rating: ratingNum,
-        message: message.trim(),
-        status: "Published",
-        createdAt: serverTimestamp(),
-        ...(ownerUid ? { ownerUid } : {}),
-      })
-      feedbackId = docRef.id
-      console.log("Feedback saved:", { name, email, rating: ratingNum, feedbackId })
-    } catch (firestoreError) {
-      console.error("Firestore error:", firestoreError)
-      return NextResponse.json(
-        { error: "Failed to save feedback", details: firestoreError.message },
-        { status: 500 },
-      )
-    }
-
-    try {
-      const smtp = await resolveCentralEnvMail()
-      if (!smtp.ok) {
-        console.warn("Feedback mail skipped:", smtp.code, smtp.message)
-        return NextResponse.json({
-          success: true,
-          message: "Feedback submitted successfully",
-        })
+      const invite = inviteSnapshot.data()
+      const bookingRef = db.collection("guestbooking").doc(String(invite.bookingId || ""))
+      const ownerRef = db.collection("resortOwners").doc(String(invite.ownerUid || ""))
+      const [bookingSnapshot, ownerSnapshot] = await Promise.all([
+        transaction.get(bookingRef),
+        transaction.get(ownerRef),
+      ])
+      const booking = bookingSnapshot.exists
+        ? { id: bookingSnapshot.id, ...bookingSnapshot.data() }
+        : null
+      if (!isFeedbackInviteActive(invite, booking, now)) {
+        return { error: "This feedback link has already been used or has expired.", status: 410 }
+      }
+      if (!ownerSnapshot.exists || String(ownerSnapshot.get("status") || "").toLowerCase() !== "approved") {
+        return { error: "This resort is unavailable.", status: 410 }
       }
 
-      const adminEmail = resolveAdminInboxEmail({
-        brandingEmail: smtp.brandingEmail,
-        replyTo: smtp.replyTo,
-        smtpUser: smtp.user,
+      transaction.create(feedbackRef, {
+        ownerUid: invite.ownerUid,
+        bookingId: booking.id,
+        checkIn: String(booking.checkIn || ""),
+        checkOut: String(booking.checkOut || ""),
+        name: String(booking.name || "Guest").slice(0, 120),
+        rating,
+        message,
+        status: "Hidden",
+        submittedVia: "one-time-link",
+        createdAt: now,
       })
-      const senderName = getResortAdminMailDisplayName()
-
-      if (adminEmail) {
-        const stars = "⭐".repeat(ratingNum)
-        const adminMailOptions = {
-          from: `"${senderName}" <${smtp.user}>`,
-          to: adminEmail,
-          replyTo: smtp.replyTo,
-          subject: `New Guest Feedback - ${ratingNum} Star${ratingNum !== 1 ? "s" : ""} Rating`,
-          html: `
-              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
-                <h2 style="color: #059669;">New Guest Feedback Received</h2>
-                <p>You have received a new feedback submission from your website.</p>
-                <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; padding: 15px; margin: 20px 0; border-radius: 4px;">
-                  <p style="margin: 0;"><strong>Name:</strong> ${name.trim()}</p>
-                  <p style="margin: 8px 0;"><strong>Email:</strong> ${email.trim()}</p>
-                  <p style="margin: 8px 0;"><strong>Rating:</strong> ${stars} (${ratingNum}/5)</p>
-                  <p style="margin: 8px 0 0 0;"><strong>Feedback:</strong></p>
-                  <p style="margin: 10px 0 0 0; color: #374151; white-space: pre-wrap;">${message.trim()}</p>
-                </div>
-                <p style="margin-top: 20px; font-size: 12px; color: #6b7280;">Feedback ID: ${feedbackId}</p>
-                <p style="margin-top: 10px;">
-                  <a href="${process.env.NEXT_PUBLIC_ADMIN_URL || "http://localhost:3000/admin"}" style="display: inline-block; background-color: #059669; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px;">View in Admin Panel</a>
-                </p>
-              </div>
-            `,
-          text: `New Guest Feedback\n\nName: ${name.trim()}\nEmail: ${email.trim()}\nRating: ${ratingNum}/5\n\nFeedback:\n${message.trim()}\n\nFeedback ID: ${feedbackId}`,
-        }
-
-        await smtp.transporter.sendMail(adminMailOptions)
-        console.log("Feedback notification email sent to admin:", adminEmail)
-      }
-    } catch (emailError) {
-      console.error("Error sending email:", emailError)
-    }
-
-    return NextResponse.json({
-      success: true,
-      message: "Feedback submitted successfully",
+      transaction.update(tokenRef, { usedAt: now })
+      transaction.update(bookingRef, {
+        feedbackSubmittedAt: now,
+        feedbackTokenHash: FieldValue.delete(),
+      })
+      writeResortAdminEvent(transaction, db, {
+        ownerUid: invite.ownerUid,
+        actorUid: "guest",
+        actorEmail: "",
+        actorRole: "guest",
+        action: "feedback.created",
+        entityType: "feedback",
+        entityId: feedbackRef.id,
+        summary: "A checked-out guest submitted feedback.",
+        after: { status: "Hidden" },
+        notification: {
+          type: "feedback.new",
+          title: "New guest feedback",
+          message: `New feedback (${rating}/5) was submitted for booking ${booking.id}.`,
+        },
+      })
+      return { success: true }
     })
+
+    if (result.error) {
+      return Response.json({ error: result.error }, { status: result.status })
+    }
+    return Response.json({ success: true, message: "Thank you for sharing your feedback." })
   } catch (error) {
-    console.error("Error processing feedback:", error)
-    return NextResponse.json(
-      { error: "Failed to process feedback", details: error.message },
-      { status: 500 },
-    )
+    console.error("Failed to submit one-time guest feedback:", error)
+    return Response.json({ error: "Feedback could not be submitted. Please try again." }, { status: 500 })
   }
 }

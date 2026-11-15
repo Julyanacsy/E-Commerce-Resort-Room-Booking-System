@@ -3,6 +3,7 @@ import { renderBookingEmailLayout } from "@/lib/booking-email-layout"
 import { getBookingDb, getManilaDate, jsonFailure } from "@/lib/booking-api-server"
 import { writeResortAdminAudit } from "@/lib/resort-admin-events.mjs"
 import { getDueBookingReminderKinds } from "@/lib/booking-reminder-domain.mjs"
+import { getPublicAppUrl, issueBookingFeedbackToken } from "@/lib/booking-feedback-server"
 
 export async function GET(request) {
   const secret = String(process.env.CRON_SECRET || "").trim()
@@ -71,11 +72,18 @@ export async function GET(request) {
               message: `Your stay at ${booking.roomType || "the resort"} ends tomorrow, ${booking.checkOut}. Please follow the resort's check-out time and return any keys or access items.`,
               subject: `Check-out reminder: ${item.id}`,
             }
-          } else if (kind === "checkOut") {
+          } else {
+            const token = await issueBookingFeedbackToken(db, item.ref)
+            const feedbackUrl = token
+              ? new URL(`/feedback/${token}`, getPublicAppUrl(request)).toString()
+              : ""
             reminder = {
-              title: "Check-out reminder",
-              message: `Your stay at ${booking.roomType || "the resort"} ends tomorrow, ${booking.checkOut}. Please follow the resort's check-out time and return any keys or access items.`,
-              subject: `Check-out reminder: ${item.id}`,
+              title: "Thank you for staying with us",
+              message: `Thank you for choosing ${mail.brandName}. We hope you enjoyed your stay and would be happy to welcome you again.`,
+              subject: `Thank you for your stay: ${item.id}`,
+              actionLink: feedbackUrl
+                ? { href: feedbackUrl, label: "Share your feedback" }
+                : null,
             }
           }
 
@@ -86,13 +94,14 @@ export async function GET(request) {
             subject: reminder.subject,
             text: `${reminder.message}\nBooking reference: ${item.id}${reminder.details?.length
               ? `\n\n${reminder.details.map((detail) => `${detail.title}:\n${detail.body}`).join("\n\n")}`
-              : ""}`,
+              : ""}${reminder.actionLink ? `\n\nShare your feedback: ${reminder.actionLink.href}` : ""}`,
             html: renderBookingEmailLayout({
               title: reminder.title,
               greeting: `Hello ${booking.name || "Guest"},`,
               message: `${reminder.message} Booking reference: ${item.id}.`,
               brandName: mail.brandName,
               details: reminder.details,
+              actionLink: reminder.actionLink,
             }),
           })
           await db.runTransaction(async (transaction) => {

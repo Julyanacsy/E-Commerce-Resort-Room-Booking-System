@@ -17,6 +17,62 @@ service cloud.firestore {
     match /bookingDateLocks/{lockId} {
       allow read, write: if false;
     }
+    match /bookingFeedbackTokens/{tokenHash} {
+      allow read, write: if false;
+    }
+    match /resortNotificationOutbox/{eventId} {
+      function isVerifiedSuperAdminEmail() {
+        return request.auth != null
+          && request.auth.token.email_verified == true
+          && request.auth.token.email != null
+          && (request.auth.token.email == "ecommerceresortadmin@gmail.com"
+              || request.auth.token.email == "commerceresortadmin@gmail.com");
+      }
+
+      allow create: if isVerifiedSuperAdminEmail()
+        && request.resource.data.keys().hasOnly([
+          "ownerUid",
+          "eventId",
+          "action",
+          "entityType",
+          "entityId",
+          "audienceRoles",
+          "title",
+          "message",
+          "actorUid",
+          "platformAdminRecipient",
+          "status",
+          "attempts",
+          "createdAt"
+        ])
+        && request.resource.data.keys().hasAll([
+          "eventId",
+          "action",
+          "entityType",
+          "entityId",
+          "audienceRoles",
+          "title",
+          "message",
+          "platformAdminRecipient",
+          "status",
+          "attempts",
+          "createdAt"
+        ])
+        && request.resource.data.eventId == eventId
+        && request.resource.data.entityType == "platform"
+        && request.resource.data.platformAdminRecipient == true
+        && request.resource.data.audienceRoles is list
+        && request.resource.data.audienceRoles.size() == 0
+        && request.resource.data.status == "pending"
+        && request.resource.data.attempts == 0
+        && request.resource.data.action is string
+        && request.resource.data.action.size() <= 60
+        && request.resource.data.title is string
+        && request.resource.data.title.size() <= 100
+        && request.resource.data.message is string
+        && request.resource.data.message.size() <= 300;
+      allow read, update, delete: if false;
+    }
     match /paymentHistory/{paymentId} {
       allow read, write: if false;
     }
@@ -34,27 +90,8 @@ service cloud.firestore {
 
       allow read: if request.auth != null
         && (request.auth.uid == ownerId || isSuperAdminEmail());
-      allow create: if request.auth != null
-        && request.auth.uid == ownerId
-        && request.resource.data.uid == ownerId
-        && request.resource.data.get("status", "pending") == "pending";
-      allow update: if isSuperAdminEmail()
-        || (request.auth != null
-          && request.auth.uid == ownerId
-          && request.resource.data.uid == resource.data.uid
-          && request.resource.data.role == resource.data.role
-          && request.resource.data.status == resource.data.status
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            "email",
-            "displayName",
-            "photoURL",
-            "createdAt",
-            "updatedAt",
-            "gcashQrImage",
-            "paymentInstructions",
-            "checkInInstructions",
-            "resortRulesText"
-          ]));
+      allow create: if false;
+      allow update: if isSuperAdminEmail();
       allow delete: if isSuperAdminEmail();
 
       match /staffInvitations/{email} {
@@ -68,17 +105,25 @@ service cloud.firestore {
       match /staffNotifications/{notificationId} {
         allow read: if request.auth != null
           && resource.data.get("staffUid", "") == request.auth.uid;
-        allow update: if request.auth != null
-          && resource.data.get("staffUid", "") == request.auth.uid
-          && request.resource.data.get("staffUid", "") == request.auth.uid
-          && request.resource.data.get("read", false) == true
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["read", "readAt"]);
-        allow create, delete: if false;
+        allow write: if false;
+      }
+
+      match /adminNotifications/{notificationId} {
+        allow read: if request.auth != null
+          && request.auth.uid == ownerId
+          && get(/databases/$(database)/documents/resortOwners/$(ownerId)).data.get("status", "") == "approved";
+        allow write: if false;
+      }
+
+      match /auditLogs/{logId} {
+        allow read: if request.auth != null
+          && request.auth.uid == ownerId
+          && get(/databases/$(database)/documents/resortOwners/$(ownerId)).data.get("status", "") == "approved";
+        allow write: if false;
       }
     }
 
-    // Resort listings are public. Owners may submit their own listings for review;
-    // only a verified Super Admin may approve, edit, create, or delete listings.
+    // Resort registration and listing mutations go through audited server routes.
     match /resorts/{resortId} {
       function isSuperAdminEmail() {
         return request.auth != null
@@ -89,85 +134,48 @@ service cloud.firestore {
       }
 
       allow read: if true;
-      allow create: if isSuperAdminEmail()
-        || (request.auth != null
-          && resortId == request.auth.uid
-          && request.resource.data.ownerUid == request.auth.uid
-          && request.resource.data.get("status", "pending") == "pending");
-      allow update: if isSuperAdminEmail()
-        || (request.auth != null
-          && resource.data.get("ownerUid", "") == request.auth.uid
-          && request.resource.data.ownerUid == request.auth.uid
-          && request.resource.data.status == "pending"
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            "ownerEmail",
-            "name",
-            "location",
-            "mapsUrl",
-            "description",
-            "status",
-            "updatedAt",
-            "createdAt"
-          ]));
+      allow create: if isSuperAdminEmail();
+      allow update: if isSuperAdminEmail();
       allow delete: if isSuperAdminEmail();
     }
     
-    // Rooms are public, but writes belong to the authenticated room owner.
-    // Internal helpdesk accounts may claim legacy room docs with no ownerUid.
+    // Room mutations go through the audited server API.
     match /rooms/{roomId} {
-      function isLegacyRoomsAdmin() {
-        return request.auth != null
-          && request.auth.token.email != null
-          && request.auth.token.email_verified == true
-          && (request.auth.token.email == "admin@luxestay.com"
-              || request.auth.token.email == "resort.helpdesk01@gmail.com");
-      }
-
-      function isUnscopedRoom() {
-        return resource.data.get("ownerUid", null) == null
-          || resource.data.get("ownerUid", "") == "";
-      }
-
       allow read: if true;
-      allow create: if request.auth != null
-        && request.resource.data.ownerUid == request.auth.uid;
-      allow update: if request.auth != null
-        && (
-          (resource.data.get("ownerUid", "") == request.auth.uid
-            && request.resource.data.ownerUid == request.auth.uid)
-          || (isLegacyRoomsAdmin()
-            && isUnscopedRoom()
-            && request.resource.data.ownerUid == request.auth.uid)
-        );
-      allow delete: if request.auth != null
-        && (
-          resource.data.get("ownerUid", "") == request.auth.uid
-          || (isLegacyRoomsAdmin() && isUnscopedRoom())
-        );
+      allow create, update, delete: if false;
     }
     
     // Contact messages collection
     match /contactMessages/{document=**} {
-      allow create: if true;  // Anyone can send contact messages
-      allow read, update, delete: if request.auth != null;  // Only admins can view/update/delete
+      allow create: if false;
+      allow read: if request.auth != null
+        && (resource.data.get("ownerUid", "") == request.auth.uid
+          || (request.auth.token.email_verified == true
+            && request.auth.token.email == "admin@luxestay.com"));
+      allow update, delete: if false;
     }
     
     // Feedbacks collection
     match /feedbacks/{document=**} {
-      allow create: if true;  // Anyone can submit feedback
-      allow read: if true;  // Public can view published feedbacks
-      allow update, delete: if request.auth != null;  // Only admins can update/delete
+      allow create: if false;
+      allow read: if resource.data.get("status", "") == "Published"
+        || (request.auth != null
+          && (resource.data.get("ownerUid", "") == request.auth.uid
+            || (request.auth.token.email_verified == true
+              && request.auth.token.email == "admin@luxestay.com")));
+      allow update, delete: if false;
     }
     
-    // Per-owner outbound email (Gmail) — only that signed-in owner can read/write.
+    // Per-owner outbound mail credentials are managed only by server routes.
     match /resortOwners/{ownerId}/secrets/{docId} {
-      allow read, write: if request.auth != null && request.auth.uid == ownerId;
+      allow read: if request.auth != null && request.auth.uid == ownerId;
+      allow write: if false;
     }
 
-    // Per-resort public site branding (landing + admin). Anyone can read; only that owner can write.
+    // Per-resort public site branding. Resort changes go through the audited server API.
     match /resortOwners/{ownerId}/site/{docId} {
       allow read: if true;
-      allow write: if request.auth != null && request.auth.uid == ownerId;
+      allow write: if false;
     }
 
     // Super Admin audit log — read/create only for authorized emails (append-only).
@@ -182,6 +190,20 @@ service cloud.firestore {
       allow read: if isSuperAdminEmail();
       allow create: if isSuperAdminEmail();
       allow update, delete: if false;
+    }
+    match /superAdminNotifications/{notificationId} {
+      function isSuperAdminEmail() {
+        return request.auth != null
+          && request.auth.token.email != null
+          && request.auth.token.email_verified == true
+          && (request.auth.token.email == "ecommerceresortadmin@gmail.com"
+              || request.auth.token.email == "commerceresortadmin@gmail.com");
+      }
+      allow read: if isSuperAdminEmail();
+      allow create: if isSuperAdminEmail();
+      allow update: if isSuperAdminEmail()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["read", "readAt"]);
+      allow delete: if false;
     }
 
     match /superAdminNotifications/{notificationId} {
@@ -256,7 +278,7 @@ service cloud.firestore {
               || request.auth.token.email == "commerceresortadmin@gmail.com");
       }
       allow read: if document != "resortNotifySmtp" || isSuperAdminEmail();
-      // Marketplace copy: only super admins may change (any signed-in user can still edit branding, etc.).
+      // Marketplace copy and SMTP settings are restricted to verified Super Admins.
       allow write: if document == "resortNotifySmtp"
         ? isSuperAdminEmail()
         : document == "marketplace"
@@ -272,12 +294,18 @@ service cloud.firestore {
         "guestbooking",
         "bookingOtpChallenges",
         "bookingDateLocks",
+        "bookingFeedbackTokens",
+        "resortNotificationOutbox",
         "paymentHistory",
         "resortOwners",
         "resorts",
         "superAdminAuditLog",
-        "superAdminNotifications",
-        "resortNotificationOutbox"
+        "contactMessages",
+        "feedbacks",
+        "adminNotifications",
+        "auditLogs",
+        "staffNotifications",
+        "superAdminNotifications"
       ]) && request.auth != null;
     }
   }
