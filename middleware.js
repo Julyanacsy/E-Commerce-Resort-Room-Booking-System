@@ -2,6 +2,18 @@ import { NextResponse } from "next/server"
 
 export function middleware(request) {
   const { pathname } = request.nextUrl
+  const hostname = request.nextUrl.hostname.toLowerCase()
+
+  if (
+    hostname.startsWith("e-commerce-resort-room-booking-system-") &&
+    hostname.endsWith(".vercel.app")
+  ) {
+    const url = request.nextUrl.clone()
+    url.hostname = "e-commerce-resort-room-booking-system.vercel.app"
+    url.protocol = "https:"
+    url.port = ""
+    return NextResponse.redirect(url, 308)
+  }
 
   // Belt-and-suspenders: never touch Next internals (avoids 404 on layout.css, main-app.js, RSC, HMR).
   if (pathname.startsWith("/_next") || pathname.startsWith("/api")) {
