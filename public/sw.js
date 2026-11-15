@@ -1,6 +1,6 @@
 "use strict"
 
-const CACHE_NAME = "bayrest-static-v1"
+const CACHE_NAME = "bayrest-static-v2"
 const PRECACHE_URLS = ["/manifest.json", "/icon.svg"]
 const OFFLINE_HTML = `<!doctype html>
 <html lang="en">
@@ -56,17 +56,19 @@ self.addEventListener("fetch", (event) => {
 
   if (url.pathname.startsWith("/_next/static/") || PRECACHE_URLS.includes(url.pathname)) {
     event.respondWith(
-      caches.match(request).then(
-        (cached) =>
-          cached ||
-          fetch(request).then((response) => {
-            if (response.ok) {
-              const copy = response.clone()
-              void caches.open(CACHE_NAME).then((cache) => cache.put(request, copy))
-            }
-            return response
-          }),
-      ),
+      fetch(request)
+        .then((response) => {
+          if (response.ok) {
+            const copy = response.clone()
+            void caches.open(CACHE_NAME).then((cache) => cache.put(request, copy))
+          }
+          return response
+        })
+        .catch(async (error) => {
+          const cached = await caches.match(request)
+          if (cached) return cached
+          throw error
+        }),
     )
   }
 })
