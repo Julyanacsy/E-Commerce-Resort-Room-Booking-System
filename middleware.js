@@ -3,9 +3,12 @@ import { NextResponse } from "next/server"
 export function middleware(request) {
   const { pathname } = request.nextUrl
   const hostname = request.nextUrl.hostname.toLowerCase()
+  const isProjectDeploymentHost =
+    hostname.startsWith("e-commerce-resort-room-booking-system-") ||
+    hostname.startsWith("e-commerce-resort-room-booking-git-")
 
   if (
-    hostname.startsWith("e-commerce-resort-room-booking-system-") &&
+    isProjectDeploymentHost &&
     hostname.endsWith(".vercel.app")
   ) {
     const url = request.nextUrl.clone()
