@@ -21,7 +21,8 @@ services:
     image: resort-booking:1.0
     container_name: resort-web
     env_file:
-      - .env.local
+      - path: .env.local
+        required: false
     ports:
       - "3000:3000"
     networks:
@@ -36,4 +37,4 @@ services:
 
 networks:
   dev-network:
-    external: true
+    driver: bridge
