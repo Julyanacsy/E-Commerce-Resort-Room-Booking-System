@@ -380,7 +380,7 @@ export default function Home() {
   }, [resortMarketplace.mapsUrl, bookingOwnerUid])
 
   const navLinks = bookingOwnerUid
-    ? ["Home", ...(destinationHighlights.length ? ["Highlights"] : []), "Rooms", "Guest Wi-Fi", "Lost and Found", "Booking", "About", "Contact"]
+    ? ["Home", ...(destinationHighlights.length ? ["Highlights"] : []), "Rooms", "Lost and Found", "Booking", "About", "Contact"]
     : ["Home", "Rooms", "Booking", "About", "Contact"]
   /** Marketplace listing has something to show above contact (map link and/or area label) */
   const hasResortListingHint =
@@ -1334,7 +1334,6 @@ export default function Home() {
                       {destinationHighlights[activeDestinationHighlightIndex].description}
                     </p>
                   ) : null}
-                  {bookingOwnerUid ? <GuestStayAccess ownerUid={bookingOwnerUid} theme={theme} /> : null}
                   <button
                     type="button"
                     onClick={(event) => handleSmoothScroll(event, "booking")}
@@ -1388,6 +1387,8 @@ export default function Home() {
           </div>
         </section>
       )}
+
+      {bookingOwnerUid ? <GuestStayAccess ownerUid={bookingOwnerUid} /> : null}
 
       {/* Rooms Section */}
       <section id="rooms" className="px-4 py-20 sm:px-6 md:py-24 lg:px-8">
