@@ -7,11 +7,13 @@ import { toast } from "sonner"
 import { auth, db } from "@/lib/firebase"
 import { bookingAdminRequest } from "@/lib/booking-admin-client"
 import { isRoomArchived } from "@/lib/room-archive.mjs"
+import { getOutstandingPaymentBalance, getRecordedPaymentAmount } from "@/lib/payment-domain.mjs"
 import SearchField from "@/components/admin/search-field"
 
 const PAYMENT_FILTERS = [
   { value: "all", label: "All" },
   { value: "proof_submitted", label: "Needs review" },
+  { value: "partially_paid", label: "Deposit paid" },
   { value: "unpaid", label: "Unpaid" },
   { value: "paid", label: "Paid" },
   { value: "rejected", label: "Rejected" },
@@ -61,6 +63,9 @@ const PAYMENT_RECEIPT_ACTIONS = new Set([
   "cash-recorded",
   "walk-in-cash-recorded",
   "payment-recorded",
+  "deposit-gcash-verified",
+  "deposit-cash-recorded",
+  "balance-paid-at-check-in",
 ])
 
 export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole = "owner" }) {
@@ -181,7 +186,7 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
     for (const booking of bookings) {
       const status = booking.paymentStatus || "unpaid"
       if (
-        !["paid", "rejected"].includes(status) ||
+        !["paid", "partially_paid", "rejected"].includes(status) ||
         !booking.paymentReviewedAt ||
         records.some((event) => event.bookingId === booking.id && event.paymentStatus === status)
       ) {
@@ -194,7 +199,7 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
         roomType: booking.roomType || "Room",
         checkIn: booking.checkIn || "",
         checkOut: booking.checkOut || "",
-        action: status === "paid" ? "payment-recorded" : "payment-rejected",
+        action: status === "rejected" ? "payment-rejected" : "payment-recorded",
         paymentStatus: status,
         paymentMethod: booking.paymentMethod || "gcash",
         amount: Number(booking.paymentAmount ?? booking.totalPrice ?? 0),
@@ -233,7 +238,7 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
   const monthlyPaymentSummary = useMemo(() => {
     const records = historyRecords.filter(
       (record) =>
-        record.paymentStatus === "paid" &&
+        ["paid", "partially_paid"].includes(record.paymentStatus) &&
         PAYMENT_RECEIPT_ACTIONS.has(record.action) &&
         getManilaDateKey(record.createdAt).startsWith(summaryMonth),
     )
@@ -267,11 +272,7 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
     () =>
       bookings.reduce((sum, booking) => {
         if (["Cancelled", "Declined"].includes(booking.status)) return sum
-        const total = Number(booking.totalPrice || 0)
-        const paid = booking.paymentStatus === "paid"
-          ? Number(booking.paymentAmount ?? total)
-          : Number(booking.paymentAmount || 0)
-        return sum + Math.max(0, total - paid)
+        return sum + getOutstandingPaymentBalance(booking)
       }, 0),
     [bookings],
   )
@@ -398,48 +399,43 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
 
   const updatePayment = async (booking, action) => {
     const actionLabel =
-      action === "mark-as-paid" ? "verify the GCash payment" : action === "reject" ? "reject this payment" : "record full cash payment"
-    if (typeof window !== "undefined" && !window.confirm(`Are you sure you want to ${actionLabel} for ${booking.name || "this guest"} (${formatMoney(booking.totalPrice)})?`)) {
+      action === "mark-as-paid" ? "verify the GCash reservation deposit" : action === "reject" ? "reject this payment" : "record the reservation deposit in cash"
+    const depositAmount = Number(booking.reservationDepositAmount ?? booking.totalPrice ?? 0)
+    if (typeof window !== "undefined" && !window.confirm(`Are you sure you want to ${actionLabel} for ${booking.name || "this guest"} (${formatMoney(depositAmount)})?`)) {
       return
     }
 
     setBusyBookingId(booking.id)
-    const paymentStatus = action === "reject" ? "rejected" : "paid"
     const paymentMethod = action === "record-cash" ? "cash" : "gcash"
     try {
-      await bookingAdminRequest("/api/booking/update-payment-status", {
+      const result = await bookingAdminRequest("/api/booking/update-payment-status", {
         method: "POST",
         body: JSON.stringify({ bookingId: booking.id, action }),
       })
       setBookings((current) =>
         current.map((item) =>
-          item.id === booking.id ? { ...item, paymentStatus, paymentMethod } : item,
+          item.id === booking.id
+            ? {
+                ...item,
+                paymentStatus: result.paymentStatus,
+                paymentAmount: result.paymentAmount,
+                paymentMethod: action === "reject" ? item.paymentMethod : result.paymentMethod || paymentMethod,
+              }
+            : item,
         ),
       )
       await loadPaymentHistory()
 
       if (!booking.email) {
-        toast.success(
-          action === "reject"
-            ? "Payment proof rejected. This guest has no email address."
-            : `${paymentMethod === "cash" ? "Cash payment" : "GCash payment"} recorded; this guest has no email address.`,
-        )
+        toast.success(action === "reject"
+          ? "Payment proof rejected. This guest has no email address."
+          : `Reservation deposit recorded; this guest has no email address.`)
         return
       }
 
-      try {
-        await bookingAdminRequest("/api/booking/send-status-email", {
-          method: "POST",
-          body: JSON.stringify({ bookingId: booking.id, type: "payment" }),
-        })
-        toast.success(
-          action === "reject"
-            ? "Payment proof rejected and guest notified."
-            : `${paymentMethod === "cash" ? "Cash payment" : "GCash payment"} recorded and guest notified.`,
-        )
-      } catch (emailError) {
-        toast.error(`Payment updated, but email failed: ${emailError.message}`)
-      }
+      toast.success(action === "reject"
+        ? "Payment proof rejected; guest email is queued."
+        : `Reservation deposit recorded; guest email is queued.`)
     } catch (updateError) {
       console.error("Failed to update payment:", updateError)
       toast.error(updateError.message || "Payment could not be updated.")
@@ -594,16 +590,16 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
         <div className="rounded-2xl border border-[#eee2d5] bg-white p-5 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#7b817a]">Payments received</p>
           <p className="mt-2 text-2xl font-bold text-[#14583f]">
-            {formatMoney(bookings.filter((booking) => booking.paymentStatus === "paid").reduce(
-              (sum, booking) => sum + Number(booking.paymentAmount ?? booking.totalPrice ?? 0),
+            {formatMoney(bookings.reduce(
+              (sum, booking) => sum + getRecordedPaymentAmount(booking),
               0,
             ))}
           </p>
         </div>
         <div className="rounded-2xl border border-[#eee2d5] bg-white p-5 shadow-sm">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#7b817a]">Paid bookings</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#7b817a]">Bookings with payment</p>
           <p className="mt-2 text-2xl font-bold text-[#18271e]">
-            {bookings.filter((booking) => booking.paymentStatus === "paid").length}
+            {bookings.filter((booking) => getRecordedPaymentAmount(booking) > 0).length}
           </p>
         </div>
         <div className="rounded-2xl border border-[#eee2d5] bg-white p-5 shadow-sm">
@@ -793,7 +789,9 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
               ownerUid &&
               ["owner", "admin", "front-desk"].includes(staffRole) &&
               !["Completed", "Declined", "Cancelled"].includes(booking.status) &&
-              paymentStatus !== "paid"
+              ["unpaid", "rejected"].includes(paymentStatus)
+            const paidAmount = getRecordedPaymentAmount(booking)
+            const balanceDue = getOutstandingPaymentBalance(booking)
 
             return (
               <article key={booking.id} className="rounded-2xl border border-[#eee2d5] bg-white p-5 shadow-sm">
@@ -812,7 +810,9 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
 
                 <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
                   <div><dt className="text-[#7b817a]">Stay</dt><dd className="font-medium text-[#18271e]">{formatDate(booking.checkIn)} – {formatDate(booking.checkOut)}</dd></div>
-                  <div><dt className="text-[#7b817a]">Total</dt><dd className="font-medium text-[#18271e]">{formatMoney(booking.totalPrice)}</dd></div>
+                  <div><dt className="text-[#7b817a]">Stay total</dt><dd className="font-medium text-[#18271e]">{formatMoney(booking.totalPrice)}</dd></div>
+                  <div><dt className="text-[#7b817a]">Paid so far</dt><dd className="font-medium text-[#18271e]">{formatMoney(paidAmount)}</dd></div>
+                  <div><dt className="text-[#7b817a]">Balance due</dt><dd className="font-medium text-[#18271e]">{formatMoney(balanceDue)}</dd></div>
                   <div><dt className="text-[#7b817a]">Method</dt><dd className="font-medium capitalize text-[#18271e]">{booking.paymentMethod || "—"}</dd></div>
                   <div><dt className="text-[#7b817a]">Booking</dt><dd className="font-medium text-[#18271e]">{booking.status || "Pending"}</dd></div>
                 </dl>
@@ -862,7 +862,7 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
                         disabled={busyBookingId === booking.id || !booking.hasValidId}
                         onClick={() => updatePayment(booking, "mark-as-paid")}
                         className="rounded-xl bg-[#00634b] px-4 py-2 text-sm font-semibold text-white hover:bg-[#004f3b] disabled:opacity-60"
-                      >Mark GCash as paid</button>
+                      >Verify reservation deposit</button>
                       <button
                         type="button"
                         disabled={busyBookingId === booking.id}
@@ -877,9 +877,9 @@ export default function ManagePayments({ ownerUid, isLegacyHelpdesk, staffRole =
                       disabled={busyBookingId === booking.id}
                       onClick={() => updatePayment(booking, "record-cash")}
                       className="rounded-xl border border-[#00634b] px-4 py-2 text-sm font-semibold text-[#14583f] hover:bg-[#f1f7f2] disabled:opacity-60"
-                    >Record cash received</button>
+                    >Record reservation deposit (cash)</button>
                   ) : null}
-                  {paymentStatus === "paid" && canDownloadReceipt ? (
+                  {["paid", "partially_paid"].includes(paymentStatus) && canDownloadReceipt ? (
                     <button
                       type="button"
                       disabled={busyBookingId === booking.id}

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { bookingAdminRequest } from "@/lib/booking-admin-client"
 import { toast } from "sonner"
+import SearchField from "@/components/admin/search-field"
 
 const ROLE_LABELS = {
   admin: "Admin",
@@ -19,6 +20,7 @@ export default function StaffManagement() {
   const [staff, setStaff] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [search, setSearch] = useState("")
 
   const loadStaff = useCallback(async () => {
     setLoading(true)
@@ -106,6 +108,10 @@ export default function StaffManagement() {
 
   const isPending = (member) => member.status.toLowerCase() === "pending"
   const isApproved = (member) => member.status.toLowerCase() === "approved"
+  const filteredStaff = staff.filter((member) =>
+    [member.name, member.email, member.contact, member.role, member.status]
+      .some((value) => String(value || "").toLowerCase().includes(search.trim().toLowerCase())),
+  )
 
   return (
     <section className="space-y-5">
@@ -176,13 +182,17 @@ export default function StaffManagement() {
         </p>
       </form>
 
+      <SearchField value={search} onChange={setSearch} placeholder="Search name, email, role, or status" />
+
       {loading ? (
         <p role="status" className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">Loading staff…</p>
       ) : staff.length === 0 ? (
         <p className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">No staff accounts yet.</p>
+      ) : filteredStaff.length === 0 ? (
+        <p className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">No staff match “{search}”.</p>
       ) : (
         <div className="divide-y divide-border rounded-2xl border border-border bg-card">
-          {staff.map((member) => (
+          {filteredStaff.map((member) => (
             <article key={member.email} className="flex flex-wrap items-center justify-between gap-3 p-4">
               <div>
                 <p className="font-semibold text-foreground">{member.name || member.email}</p>

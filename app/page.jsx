@@ -21,11 +21,13 @@ import {
 } from "lucide-react"
 import { BRANDING_DEFAULTS, useBranding } from "@/hooks/use-branding"
 import { normalizeOwnerUidFromSearchParam } from "@/lib/booking-tenant"
+import { isRoomArchived } from "@/lib/room-archive.mjs"
+import { getDestinationHighlightTitle } from "@/lib/resort-highlights.mjs"
+import { calculateReservationDeposit, DEFAULT_RESERVATION_DEPOSIT_PERCENT } from "@/lib/payment-domain.mjs"
 import { useMarketplaceSettings } from "@/hooks/use-marketplace-settings"
 import { useResortOwnerBranding } from "@/hooks/use-resort-owner-branding"
 import DynamicHead from "@/components/dynamic-head"
 import { db } from "@/lib/firebase"
-import LostAndFoundPublic from "@/components/lost-and-found-public"
 import { collection, doc, query, orderBy, onSnapshot, where } from "firebase/firestore"
 import { syncManager } from "@/lib/offline-storage"
 import PWAInstallButton from "@/components/pwa-install-button"
@@ -43,6 +45,8 @@ import { CalendarIcon } from "lucide-react"
 import { format } from "date-fns"
 import { compressImageFileToDataUrl } from "@/lib/data-url-files"
 import { getGoogleDirectionsUrl, getMapPreviewIframeSrc } from "@/lib/maps-preview-url"
+import LostAndFoundPublic from "@/components/lost-and-found-public"
+import GuestStayAccess from "@/components/guest-stay-access"
 
 // Feedback will be fetched from Firestore dynamically
 
@@ -278,7 +282,13 @@ export default function Home() {
     const read = () => {
       if (typeof window === "undefined") return
       const params = new URLSearchParams(window.location.search)
-      setBookingOwnerUid(normalizeOwnerUidFromSearchParam(params.get("o")) || null)
+      const rawOwnerUid = params.get("o")
+      const ownerUid = normalizeOwnerUidFromSearchParam(rawOwnerUid)
+      if (rawOwnerUid && !ownerUid) {
+        window.location.replace("/resorts")
+        return
+      }
+      setBookingOwnerUid(ownerUid)
     }
     read()
     window.addEventListener("popstate", read)
@@ -298,6 +308,16 @@ export default function Home() {
     : ownerBrandingLoading
       ? globalBranding
       : (ownerBrandingSnapshot ?? globalBranding)
+  const destinationHighlights =
+    bookingOwnerUid && Array.isArray(branding.destinationHighlights)
+      ? branding.destinationHighlights.filter(
+          (item) =>
+            item
+            && typeof item.title === "string"
+            && typeof item.image === "string"
+            && /^data:image\/(?:jpeg|png|webp);base64,/.test(item.image),
+        )
+      : []
 
   /** Marketplace listing fields (`resorts/{uid}`) — maps link + location label from resort admin */
   const [resortMarketplace, setResortMarketplace] = useState({ mapsUrl: "", location: "" })
@@ -360,7 +380,7 @@ export default function Home() {
   }, [resortMarketplace.mapsUrl, bookingOwnerUid])
 
   const navLinks = bookingOwnerUid
-    ? ["Home", "Rooms", "Lost and Found", "Booking", "About", "Contact"]
+    ? ["Home", ...(destinationHighlights.length ? ["Highlights"] : []), "Rooms", "Guest Wi-Fi", "Lost and Found", "Booking", "About", "Contact"]
     : ["Home", "Rooms", "Booking", "About", "Contact"]
   /** Marketplace listing has something to show above contact (map link and/or area label) */
   const hasResortListingHint =
@@ -380,6 +400,7 @@ export default function Home() {
     })
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [activeDestinationHighlightIndex, setActiveDestinationHighlightIndex] = useState(0)
   const [activeRoom, setActiveRoom] = useState(null)
   const [rooms, setRooms] = useState([])
   const [loadingRooms, setLoadingRooms] = useState(true)
@@ -426,6 +447,7 @@ export default function Home() {
   const [cancellationTermsConfirmed, setCancellationTermsConfirmed] = useState(false)
   const [paymentQrUrl, setPaymentQrUrl] = useState("")
   const [paymentInstructions, setPaymentInstructions] = useState("")
+  const [reservationDepositPercent, setReservationDepositPercent] = useState(DEFAULT_RESERVATION_DEPOSIT_PERCENT)
   const [proofOfPaymentImage, setProofOfPaymentImage] = useState("")
   const [validIdImage, setValidIdImage] = useState("")
   const [uploadingProof, setUploadingProof] = useState(false)
@@ -455,14 +477,22 @@ export default function Home() {
   const [bookedDatesError, setBookedDatesError] = useState("")
   const [checkInCalendarOpen, setCheckInCalendarOpen] = useState(false)
   const [checkOutCalendarOpen, setCheckOutCalendarOpen] = useState(false)
-  const [feedback, setFeedback] = useState({ name: "", email: "", rating: 5, message: "" })
-  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false)
   const [feedbacks, setFeedbacks] = useState([])
   const [loadingFeedbacks, setLoadingFeedbacks] = useState(true)
   const [currentFeedbackIndex, setCurrentFeedbackIndex] = useState(0)
   const [bookingConfirmation, setBookingConfirmation] = useState(null)
   const [contact, setContact] = useState({ name: "", email: "", message: "" })
   const [contactSubmitting, setContactSubmitting] = useState(false)
+
+  useEffect(() => {
+    setActiveDestinationHighlightIndex(0)
+    if (destinationHighlights.length < 2) return undefined
+
+    const timer = setInterval(() => {
+      setActiveDestinationHighlightIndex((index) => (index + 1) % destinationHighlights.length)
+    }, 5000)
+    return () => clearInterval(timer)
+  }, [destinationHighlights.length, bookingOwnerUid])
 
   const calculateNights = (checkIn, checkOut) => {
     if (!checkIn || !checkOut) return 0
@@ -479,6 +509,8 @@ export default function Home() {
   const pricePerNight = discount > 0 ? basePrice * (1 - discount / 100) : basePrice
   const nights = calculateNights(formData.checkIn, formData.checkOut)
   const estimatedTotal = nights > 0 ? pricePerNight * nights : 0
+  const estimatedDeposit = calculateReservationDeposit(estimatedTotal, reservationDepositPercent)
+  const estimatedBalance = Math.max(0, Math.round((estimatedTotal - estimatedDeposit) * 100) / 100)
   const formatPhp = (n) =>
     `₱${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
 
@@ -486,6 +518,7 @@ export default function Home() {
     if (!db || !bookingOwnerUid) {
       setPaymentQrUrl("")
       setPaymentInstructions("")
+      setReservationDepositPercent(DEFAULT_RESERVATION_DEPOSIT_PERCENT)
       return undefined
     }
     let active = true
@@ -497,12 +530,14 @@ export default function Home() {
         if (!active) return
         setPaymentQrUrl(String(result.gcashQrImage || "").trim())
         setPaymentInstructions(String(result.paymentInstructions || "").trim())
+        setReservationDepositPercent(Number(result.reservationDepositPercent) || DEFAULT_RESERVATION_DEPOSIT_PERCENT)
       })
       .catch((error) => {
         console.error("Failed to load resort payment details:", error)
         if (active) {
           setPaymentQrUrl("")
           setPaymentInstructions("")
+          setReservationDepositPercent(DEFAULT_RESERVATION_DEPOSIT_PERCENT)
         }
       })
     return () => {
@@ -546,6 +581,7 @@ export default function Home() {
           )
         }
         roomsData = roomsData
+          .filter((room) => !isRoomArchived(room))
           .filter((room) => {
             if (!room.availability) {
               return true
@@ -910,8 +946,8 @@ export default function Home() {
     const feedbacksRef = collection(db, "feedbacks")
     const q =
       bookingOwnerUid && !legacyUnscopedLanding
-        ? query(feedbacksRef, where("ownerUid", "==", bookingOwnerUid))
-        : query(feedbacksRef)
+        ? query(feedbacksRef, where("ownerUid", "==", bookingOwnerUid), where("status", "==", "Published"))
+        : query(feedbacksRef, where("status", "==", "Published"))
 
     const tenantOk = (fb) => {
       if (!bookingOwnerUid) return !fb.ownerUid
@@ -958,7 +994,7 @@ export default function Home() {
         // Try to fetch without query if there's an index error
         if (error.code === "failed-precondition") {
           console.warn("Firestore index missing. Fetching all feedbacks without filter...")
-          const simpleQuery = query(feedbacksRef)
+          const simpleQuery = query(feedbacksRef, where("status", "==", "Published"))
           onSnapshot(
             simpleQuery,
             (snapshot) => {
@@ -1019,43 +1055,6 @@ export default function Home() {
 
     return () => clearInterval(interval)
   }, [feedbacks.length])
-
-  const handleFeedback = async (e) => {
-    e.preventDefault()
-    
-    setFeedbackSubmitting(true)
-    
-    try {
-      const result = await syncManager.submitWithOfflineSupport(
-        "/api/feedback/submit",
-        "POST",
-        {
-          name: feedback.name,
-          email: feedback.email,
-          rating: feedback.rating,
-          message: feedback.message,
-          ownerUid: bookingOwnerUid,
-        },
-        "feedback",
-        7 * 24 * 60 * 60 * 1000 // 7 days max age for feedback
-      )
-
-      if (result.success) {
-        toast.success("Thank you for your feedback! We appreciate your input.")
-    setFeedback({ name: "", email: "", rating: 5, message: "" })
-      } else if (result.offlineId) {
-        toast.success("Your feedback is saved offline and will be submitted when you're back online!")
-        setFeedback({ name: "", email: "", rating: 5, message: "" })
-      } else {
-        toast.error(result.error || "Failed to submit feedback. Please try again.")
-      }
-    } catch (error) {
-      console.error("Error submitting feedback:", error)
-      toast.error("Failed to submit feedback. Please try again.")
-    } finally {
-      setFeedbackSubmitting(false)
-    }
-  }
 
   const handleContact = async (e) => {
     e.preventDefault()
@@ -1164,8 +1163,8 @@ export default function Home() {
               {navLinks.map((item) => (
                 <a
                   key={item}
-                  href={`#${item.toLowerCase()}`}
-                  onClick={(e) => handleSmoothScroll(e, item.toLowerCase())}
+                  href={`#${item.toLowerCase().replace(/\s+/g, "-")}`}
+                  onClick={(e) => handleSmoothScroll(e, item.toLowerCase().replace(/\s+/g, "-"))}
                   className={`text-sm font-medium tracking-wide transition lg:text-[15px] ${
                     theme === "dark"
                       ? "text-gray-300 hover:text-white"
@@ -1223,9 +1222,9 @@ export default function Home() {
               {navLinks.map((item, index) => (
                 <a
                   key={item}
-                  href={`#${item.toLowerCase()}`}
+                  href={`#${item.toLowerCase().replace(/\s+/g, "-")}`}
                   onClick={(e) => {
-                    handleSmoothScroll(e, item.toLowerCase())
+                    handleSmoothScroll(e, item.toLowerCase().replace(/\s+/g, "-"))
                     setMobileMenuOpen(false) // Close mobile menu after clicking
                   }}
                   className={`transition-all duration-200 cursor-pointer transform hover:translate-x-1 ${
@@ -1296,6 +1295,99 @@ export default function Home() {
           </div>
         </div>
       </section>
+
+      {destinationHighlights.length > 0 && (
+        <section id="highlights" className={`px-4 py-14 sm:px-6 md:py-18 lg:px-8 ${theme === "dark" ? "bg-slate-950" : "bg-emerald-50/70"}`}>
+          <div className="mx-auto max-w-7xl">
+            <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className={`text-xs font-bold uppercase tracking-[0.2em] ${theme === "dark" ? "text-emerald-300" : "text-emerald-700"}`}>
+                  Explore the area
+                </p>
+                <h2 className={`mt-2 text-2xl font-bold tracking-tight md:text-3xl ${theme === "dark" ? "text-white" : "text-emerald-950"}`}>
+                  Resort highlights
+                </h2>
+                <p className={`mt-2 max-w-2xl text-sm ${theme === "dark" ? "text-slate-300" : "text-gray-600"}`}>
+                  Discover the places and experiences that make {branding.name} special.
+                </p>
+              </div>
+              <span className={`text-sm ${theme === "dark" ? "text-slate-400" : "text-gray-500"}`}>
+                {activeDestinationHighlightIndex + 1} / {destinationHighlights.length}
+              </span>
+            </div>
+
+            <div className="relative isolate min-h-[300px] overflow-hidden rounded-2xl bg-slate-900 shadow-xl sm:min-h-[380px]" aria-roledescription="carousel" aria-label="Resort destination highlights">
+              <img
+                key={destinationHighlights[activeDestinationHighlightIndex]?.image}
+                src={destinationHighlights[activeDestinationHighlightIndex]?.image}
+                alt={getDestinationHighlightTitle(destinationHighlights[activeDestinationHighlightIndex]?.title)}
+                className="absolute inset-0 z-0 h-full w-full object-cover"
+              />
+              <div className="absolute inset-0 z-0 bg-gradient-to-t from-black/80 via-black/20 to-black/5" />
+              <div className="absolute inset-x-0 bottom-0 z-10 flex items-end justify-between gap-4 p-5 sm:p-8">
+                <div className="max-w-2xl text-white">
+                  <h3 className="text-2xl font-bold sm:text-3xl">
+                    {getDestinationHighlightTitle(destinationHighlights[activeDestinationHighlightIndex]?.title)}
+                  </h3>
+                  {destinationHighlights[activeDestinationHighlightIndex]?.description ? (
+                    <p className="mt-2 text-sm leading-6 text-white/85 sm:text-base">
+                      {destinationHighlights[activeDestinationHighlightIndex].description}
+                    </p>
+                  ) : null}
+                  {bookingOwnerUid ? <GuestStayAccess ownerUid={bookingOwnerUid} theme={theme} /> : null}
+                  <button
+                    type="button"
+                    onClick={(event) => handleSmoothScroll(event, "booking")}
+                    className="mt-5 rounded-full bg-amber-500 px-5 py-2.5 text-sm font-bold text-white shadow-lg transition hover:bg-amber-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                  >
+                    Book Now
+                  </button>
+                </div>
+                {destinationHighlights.length > 1 ? (
+                  <div className="flex shrink-0 gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setActiveDestinationHighlightIndex((index) =>
+                          (index - 1 + destinationHighlights.length) % destinationHighlights.length,
+                        )
+                      }
+                      className="flex h-10 w-10 items-center justify-center rounded-full border border-white/60 bg-black/30 text-white backdrop-blur transition hover:bg-black/60"
+                      aria-label="Previous destination highlight"
+                    >
+                      <ChevronLeft size={20} aria-hidden />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setActiveDestinationHighlightIndex((index) => (index + 1) % destinationHighlights.length)
+                      }
+                      className="flex h-10 w-10 items-center justify-center rounded-full border border-white/60 bg-black/30 text-white backdrop-blur transition hover:bg-black/60"
+                      aria-label="Next destination highlight"
+                    >
+                      <ChevronRight size={20} aria-hidden />
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+              {destinationHighlights.length > 1 ? (
+                <div className="absolute right-5 top-5 z-10 flex gap-1.5" aria-label="Choose destination highlight">
+                  {destinationHighlights.map((item, index) => (
+                    <button
+                      key={`${item.title}-${index}`}
+                      type="button"
+                      onClick={() => setActiveDestinationHighlightIndex(index)}
+                      className={`h-2 rounded-full transition-all ${index === activeDestinationHighlightIndex ? "w-7 bg-white" : "w-2 bg-white/60 hover:bg-white"}`}
+                      aria-label={`Show ${item.title}`}
+                      aria-current={index === activeDestinationHighlightIndex ? "true" : undefined}
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Rooms Section */}
       <section id="rooms" className="px-4 py-20 sm:px-6 md:py-24 lg:px-8">
@@ -2191,8 +2283,20 @@ export default function Home() {
                       </div>
                       <div className="text-sm text-emerald-900/90">
                         <p className="font-semibold">Scan to pay via GCash.</p>
+                        {estimatedTotal > 0 ? (
+                          <div className="mt-3 rounded-lg border border-emerald-200 bg-white/80 p-3">
+                            <p className="font-semibold">Reservation payment breakdown</p>
+                            <div className="mt-2 space-y-1 text-xs">
+                              <p className="flex justify-between gap-3"><span>Estimated stay total</span><strong>{formatPhp(estimatedTotal)}</strong></p>
+                              <p className="flex justify-between gap-3"><span>Due now ({reservationDepositPercent}% deposit)</span><strong>{formatPhp(estimatedDeposit)}</strong></p>
+                              <p className="flex justify-between gap-3"><span>Balance due at check-in</span><strong>{formatPhp(estimatedBalance)}</strong></p>
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="mt-3 text-xs text-emerald-900/70">Select a room and stay dates to see the deposit due.</p>
+                        )}
                         <p className="mt-1 text-xs text-emerald-900/70">
-                          After payment, upload your proof of payment and 1 valid ID below, then proceed to OTP.
+                          Pay the reservation deposit only. The remaining balance is collected at check-in. After paying the deposit, upload its proof and 1 valid ID below, then proceed to OTP.
                         </p>
                         {paymentInstructions ? (
                           <p className="mt-2 text-xs text-emerald-900/80">{paymentInstructions}</p>
@@ -2795,73 +2899,17 @@ export default function Home() {
               )}
             </div>
           )}
-          <div
-            className={`mx-auto mt-4 max-w-2xl rounded-2xl p-8 md:p-10 ${
-              theme === "dark"
-                ? "bg-linear-to-r from-slate-800 to-slate-700 ring-1 ring-slate-600/40"
-                : "bg-linear-to-r from-emerald-50 to-emerald-100 ring-1 ring-emerald-100/80"
-            }`}
-          >
-            <h3
-              className={`mb-8 text-center text-xl font-bold md:text-2xl ${
-                theme === "dark" ? "text-white" : "text-emerald-700"
-              }`}
-            >
+          <div className={`mx-auto mt-4 max-w-2xl rounded-2xl p-8 text-center ${
+            theme === "dark"
+              ? "bg-linear-to-r from-slate-800 to-slate-700 ring-1 ring-slate-600/40"
+              : "bg-linear-to-r from-emerald-50 to-emerald-100 ring-1 ring-emerald-100/80"
+          }`}>
+            <h3 className={`text-xl font-bold md:text-2xl ${theme === "dark" ? "text-white" : "text-emerald-700"}`}>
               Share your feedback
             </h3>
-            <form onSubmit={handleFeedback} className="space-y-5">
-              <input
-                type="text"
-                placeholder="Your Name"
-                value={feedback.name}
-                onChange={(e) => setFeedback({ ...feedback, name: e.target.value })}
-                className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-700"
-                required
-              />
-              <input
-                type="email"
-                placeholder="Your Email"
-                value={feedback.email}
-                onChange={(e) => setFeedback({ ...feedback, email: e.target.value })}
-                className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-700"
-                required
-              />
-              <div>
-                <label className="block text-gray-800 font-semibold mb-2">Rating</label>
-                <select
-                  value={feedback.rating}
-                  onChange={(e) => setFeedback({ ...feedback, rating: Number.parseInt(e.target.value) })}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-700"
-                >
-                  {[1, 2, 3, 4, 5].map((num) => (
-                    <option key={num} value={num}>
-                      {num} Star{num !== 1 ? "s" : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <textarea
-                placeholder="Your Feedback"
-                value={feedback.message}
-                onChange={(e) => setFeedback({ ...feedback, message: e.target.value })}
-                rows={3}
-                className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-700"
-                required
-              />
-              <button
-                type="submit"
-                disabled={feedbackSubmitting}
-                className="w-full bg-emerald-700 text-white py-3 rounded-lg hover:bg-emerald-800 transition font-semibold flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
-              >
-                {feedbackSubmitting ? (
-                  <>
-                    <Loader2 size={20} className="animate-spin" /> Submitting...
-                  </>
-                ) : (
-                  "Submit Feedback"
-                )}
-              </button>
-            </form>
+            <p className={`mt-3 text-sm leading-6 ${theme === "dark" ? "text-slate-300" : "text-gray-700"}`}>
+              To keep reviews tied to real stays, checked-out guests receive a private, single-use feedback link by email.
+            </p>
           </div>
         </div>
       </section>

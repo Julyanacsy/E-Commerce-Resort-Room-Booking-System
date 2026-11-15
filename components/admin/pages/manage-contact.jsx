@@ -1,9 +1,11 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from "firebase/firestore"
+import { collection, doc, onSnapshot, query, where } from "firebase/firestore"
 import { toast } from "sonner"
 import { db } from "@/lib/firebase"
+import { resortAdminRequest } from "@/lib/admin-api-client"
+import SearchField from "@/components/admin/search-field"
 
 function formatCreatedAt(timestamp) {
   const date = timestamp?.toDate?.()
@@ -15,6 +17,7 @@ export default function ManageContact({ isLegacyHelpdesk, ownerUid }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [updatingId, setUpdatingId] = useState("")
+  const [search, setSearch] = useState("")
 
   useEffect(() => {
     if (!db || (!isLegacyHelpdesk && !ownerUid)) {
@@ -52,12 +55,18 @@ export default function ManageContact({ isLegacyHelpdesk, ownerUid }) {
     )
   }, [isLegacyHelpdesk, ownerUid])
 
+  const filteredMessages = messages.filter((message) =>
+    [message.name, message.email, message.phone, message.message, message.status]
+      .some((value) => String(value || "").toLowerCase().includes(search.trim().toLowerCase())),
+  )
+
   const handleStatusChange = async (messageId, status) => {
     setUpdatingId(messageId)
     try {
-      await updateDoc(doc(db, "contactMessages", messageId), {
+      await resortAdminRequest("/api/resort/admin-mutations", {
+        action: "contact.status",
+        entityId: messageId,
         status,
-        updatedAt: serverTimestamp(),
       })
       toast.success(`Message marked ${status.toLowerCase()}.`)
     } catch (updateError) {
@@ -75,15 +84,19 @@ export default function ManageContact({ isLegacyHelpdesk, ownerUid }) {
         <p className="mt-1 text-sm text-muted-foreground">Review inquiries sent from your resort site.</p>
       </div>
 
+      <SearchField value={search} onChange={setSearch} placeholder="Search name, email, or message" />
+
       {loading ? (
         <p className="text-sm text-muted-foreground" role="status">Loading messages…</p>
       ) : error ? (
         <p className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700" role="alert">{error}</p>
       ) : messages.length === 0 ? (
         <p className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">No contact messages yet.</p>
+      ) : filteredMessages.length === 0 ? (
+        <p className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">No messages match “{search}”.</p>
       ) : (
         <div className="space-y-4">
-          {messages.map((message) => {
+          {filteredMessages.map((message) => {
             const unread = String(message.status || "").toLowerCase() !== "read"
             return (
               <article key={message.id} className="rounded-xl border border-border bg-card p-5 shadow-sm">

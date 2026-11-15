@@ -32,9 +32,10 @@ match /settings/{document=**} {
 ### Step 3: Verify Authentication
 Make sure you're logged in as admin:
 1. Check if you see your email in the admin dashboard
-2. Verify you're in the allowed admins list:
-   - `admin@luxestay.com`
-   - `resort.helpdesk01@gmail.com`
+2. `admin@luxestay.com` remains the internal legacy admin account.
+3. Resort owners must have an approved `resortOwners/{uid}` profile matching their
+   Firebase Authentication UID. `resort.helpdesk01@gmail.com` now signs in as the
+   owner of Kamayan Penthouse Beach Resort.
 
 ### Step 4: Check Firebase Console
 1. Go to Firebase Console → Firestore Database

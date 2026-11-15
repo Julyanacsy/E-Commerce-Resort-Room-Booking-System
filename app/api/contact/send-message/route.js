@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
-import { db } from "@/lib/firebase"
-import { collection, addDoc, serverTimestamp } from "firebase/firestore"
+import { getBookingDb } from "@/lib/booking-api-server"
+import { writeResortAdminAudit } from "@/lib/resort-admin-events.mjs"
 import {
   resolveCentralEnvMail,
   resolveAdminInboxEmail,
@@ -13,7 +13,11 @@ export async function POST(request) {
     const { name, email, message, ownerUid: rawOwnerUid } = await request.json()
     const ownerUid = normalizeOwnerUid(rawOwnerUid)
 
-    if (!name || !email || !message) {
+    if (
+      typeof name !== "string" || !name.trim() || name.trim().length > 120
+      || typeof email !== "string" || !email.trim() || email.trim().length > 254
+      || typeof message !== "string" || !message.trim() || message.trim().length > 5000
+    ) {
       return NextResponse.json({ error: "Name, email, and message are required" }, { status: 400 })
     }
 
@@ -22,19 +26,46 @@ export async function POST(request) {
       return NextResponse.json({ error: "Invalid email format" }, { status: 400 })
     }
 
+    const db = getBookingDb()
+    if (!db) {
+      return NextResponse.json({ error: "Firebase Admin credentials are not configured." }, { status: 503 })
+    }
+
+    if (ownerUid) {
+      const ownerSnapshot = await db.collection("resortOwners").doc(ownerUid).get()
+      if (!ownerSnapshot.exists || String(ownerSnapshot.get("status") || "").toLowerCase() !== "approved") {
+        return NextResponse.json({ error: "The selected resort is unavailable." }, { status: 404 })
+      }
+    }
+
     let messageId
     try {
-      const contactRef = collection(db, "contactMessages")
-      const docRef = await addDoc(contactRef, {
+      const docRef = db.collection("contactMessages").doc()
+      const messageData = {
         name: name.trim(),
         email: email.trim().toLowerCase(),
         message: message.trim(),
         status: "Unread",
-        createdAt: serverTimestamp(),
+        createdAt: new Date(),
         ...(ownerUid ? { ownerUid } : {}),
+      }
+      await db.runTransaction(async (transaction) => {
+        transaction.create(docRef, messageData)
+        if (ownerUid) {
+          writeResortAdminAudit(transaction, db, {
+            ownerUid,
+            actorUid: "guest",
+            actorEmail: "",
+            actorRole: "guest",
+            action: "contact-message.created",
+            entityType: "contact-message",
+            entityId: docRef.id,
+            summary: "A new contact message was received.",
+          })
+        }
       })
       messageId = docRef.id
-      console.log("Contact message saved:", { name, email, messageId })
+      console.log("Contact message saved:", { messageId })
     } catch (firestoreError) {
       console.error("Firestore error:", firestoreError)
       return NextResponse.json(
@@ -85,7 +116,7 @@ export async function POST(request) {
       await smtp.transporter.sendMail(userMailOptions)
       console.log("Confirmation email sent to user:", email.trim())
 
-      if (adminEmail) {
+      if (adminEmail && !ownerUid) {
         const adminMailOptions = {
           from: `"${senderName}" <${smtp.user}>`,
           to: adminEmail,

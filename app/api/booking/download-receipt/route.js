@@ -36,7 +36,7 @@ export async function POST(request) {
     if (!canManageBooking(authResult.user, booking)) {
       return jsonFailure("You cannot access this booking receipt.", 403)
     }
-    if (booking.paymentStatus !== "paid") {
+    if (!["paid", "partially_paid"].includes(booking.paymentStatus)) {
       return jsonFailure("A receipt is available only after payment is recorded.", 409)
     }
 
