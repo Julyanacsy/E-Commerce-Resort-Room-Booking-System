@@ -54,6 +54,7 @@ import { BRANDING_DEFAULTS, useBranding } from "@/hooks/use-branding"
 import { useResortOwnerBranding } from "@/hooks/use-resort-owner-branding"
 import { useMarketplaceSettings } from "@/hooks/use-marketplace-settings"
 import { normalizeOwnerUidFromSearchParam } from "@/lib/booking-tenant"
+import { isKamayanHelpdeskEmail } from "@/lib/kamayan-helpdesk.mjs"
 import { resortAdminRequest } from "@/lib/admin-api-client"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { compressImageFileToDataUrl } from "@/lib/data-url-files"
@@ -200,17 +201,26 @@ export default function AdminPage({ portalMode }) {
     return "light"
   })
   const isLegacyHelpdesk = Boolean(adminUser?.email && ALLOWED_ADMINS.includes(adminUser.email))
+  const isKamayanHelpdesk = isKamayanHelpdeskEmail(adminUser?.email)
   const tenantOwnerUid = adminUser && !isLegacyHelpdesk
     ? adminUser.tenantOwnerUid || adminUser.uid
     : null
+  const operationalOwnerUid = isKamayanHelpdesk ? adminUser?.uid : tenantOwnerUid
   const staffRole = adminUser?.staffRole || "owner"
+  const canManageResortInventory =
+    staffRole === "owner" || staffRole === "admin" || isKamayanHelpdesk
+  const canAccessRoomMonitoring =
+    ["owner", "admin", "front-desk"].includes(staffRole) || isKamayanHelpdesk
   const staffNavKeys = {
     admin: ["manage-bookings", "manage-inventory", "room-item-monitoring", "booking-calendar", "booking-history", "payment-integration", "lost-and-found"],
     "front-desk": ["manage-bookings", "room-item-monitoring", "booking-calendar", "payment-integration", "lost-and-found"],
     finance: ["booking-history", "payment-integration"],
   }
   const visibleNavItems = (isLegacyHelpdesk
-    ? NAV_ITEMS.filter((item) => !["lost-and-found", "audit-log", "manage-inventory", "room-item-monitoring"].includes(item.key))
+    ? NAV_ITEMS.filter((item) =>
+      !["lost-and-found", "audit-log"].includes(item.key)
+      && (isKamayanHelpdesk || !["manage-inventory", "room-item-monitoring"].includes(item.key)),
+    )
     : NAV_ITEMS)
     .filter((item) => isLegacyHelpdesk || staffRole === "owner" || staffNavKeys[staffRole]?.includes(item.key))
   const visibleSettingsItems = visibleNavItems.filter((item) => SETTINGS_NAV_KEYS.has(item.key))
@@ -1617,23 +1627,22 @@ export default function AdminPage({ portalMode }) {
           {currentPage === "dashboard" && (
             <AdminOverview
               isLegacyHelpdesk={isLegacyHelpdesk}
-              ownerUid={tenantOwnerUid}
+              ownerUid={operationalOwnerUid}
               rooms={rooms}
               roomsLoading={roomsLoading}
               roomsError={roomsError}
-              canViewInventory={!isLegacyHelpdesk && (staffRole === "owner" || staffRole === "admin")}
+              canViewInventory={canManageResortInventory}
               onOpenInventory={() => navigateToPage("manage-inventory")}
             />
           )}
 
-          {currentPage === "manage-inventory" && (staffRole === "owner" || staffRole === "admin") && (
+          {currentPage === "manage-inventory" && canManageResortInventory && (
             <ManageInventory />
           )}
           {currentPage === "room-item-monitoring"
-            && !isLegacyHelpdesk
-            && ["owner", "admin", "front-desk"].includes(staffRole)
+            && canAccessRoomMonitoring
             && (
-              <RoomItemMonitoring canManageItems={staffRole === "owner" || staffRole === "admin"} />
+              <RoomItemMonitoring canManageItems={staffRole === "owner" || staffRole === "admin" || isKamayanHelpdesk} />
             )}
           {currentPage === "lost-and-found"
             && !isLegacyHelpdesk
@@ -1658,13 +1667,6 @@ export default function AdminPage({ portalMode }) {
               onPageChange={setRoomsPage}
             />
           )}
-
-          {currentPage === "room-item-monitoring"
-            && !isLegacyHelpdesk
-            && ["owner", "admin", "front-desk"].includes(staffRole)
-            && (
-              <RoomItemMonitoring canManageItems={staffRole === "owner" || staffRole === "admin"} />
-            )}
 
           {currentPage === "manage-bookings" && (
             <ManageBookings

@@ -7,11 +7,14 @@ import {
 } from "@/lib/room-inspection-domain.mjs"
 import {
   authenticateBookingAdmin,
+  bookingBelongsToTenant,
+  getLegacyRoomOwnerUid,
   getBookingDb,
   hasBookingPermission,
   jsonFailure,
 } from "@/lib/booking-api-server"
 import { roomBelongsToTenant } from "@/lib/booking-tenant"
+import { isKamayanHelpdeskEmail } from "@/lib/kamayan-helpdesk.mjs"
 
 const MAX_RECORDS = 1000
 
@@ -36,6 +39,11 @@ function actor(user) {
   }
 }
 
+async function getLegacyOwnerUidForUser(db, user) {
+  if (isKamayanHelpdeskEmail(user.email)) return user.uid
+  return getLegacyRoomOwnerUid(db)
+}
+
 export async function GET(request) {
   const authResult = await authenticateBookingAdmin(request)
   if (authResult.error) return jsonFailure(authResult.error, authResult.status)
@@ -48,14 +56,23 @@ export async function GET(request) {
 
   try {
     const ownerUid = authResult.user.ownerUid
+    const legacyOwnerUid = await getLegacyOwnerUidForUser(db, authResult.user)
+    const includeUnscoped = ownerUid === legacyOwnerUid
     const [roomsSnapshot, itemsSnapshot, bookingsSnapshot, inspectionsSnapshot] = await Promise.all([
-      db.collection("rooms").where("ownerUid", "==", ownerUid).limit(MAX_RECORDS).get(),
+      (includeUnscoped
+        ? db.collection("rooms").limit(MAX_RECORDS)
+        : db.collection("rooms").where("ownerUid", "==", ownerUid).limit(MAX_RECORDS)).get(),
       ownerCollection(db, ownerUid, "roomInventoryItems").limit(MAX_RECORDS).get(),
-      db.collection("guestbooking").where("ownerUid", "==", ownerUid).limit(MAX_RECORDS).get(),
+      (includeUnscoped
+        ? db.collection("guestbooking").limit(MAX_RECORDS)
+        : db.collection("guestbooking").where("ownerUid", "==", ownerUid).limit(MAX_RECORDS)).get(),
       ownerCollection(db, ownerUid, "roomInspections").limit(MAX_RECORDS).get(),
     ])
     const rooms = roomsSnapshot.docs
-      .filter((room) => room.get("isArchived") !== true)
+      .filter((room) =>
+        room.get("isArchived") !== true
+        && roomBelongsToTenant(room.data(), ownerUid, legacyOwnerUid),
+      )
       .map((room) => ({ id: room.id, name: String(room.get("name") || "Room") }))
     const roomIds = new Set(rooms.map((room) => room.id))
     const roomItems = itemsSnapshot.docs.map((item) => ({ id: item.id, ...item.data() }))
@@ -78,23 +95,25 @@ export async function GET(request) {
         } : null,
       }]
     }))
-    const bookings = bookingsSnapshot.docs.map((booking) => {
-      const data = booking.data()
-      return {
-        id: booking.id,
-        name: String(data.name || "Guest"),
-        roomId: String(data.roomId || ""),
-        roomType: String(data.roomType || "Room"),
-        checkIn: String(data.checkIn || ""),
-        checkOut: String(data.checkOut || ""),
-        status: String(data.status || ""),
-        stayStatus: String(data.stayStatus || "not_checked_in"),
-      }
-    }).filter((booking) =>
-      roomIds.has(booking.roomId)
-      && (booking.status === "Approved" || (booking.status === "Completed" && booking.stayStatus === "checked_out"))
-      && ["not_checked_in", "checked_in", "checked_out"].includes(booking.stayStatus),
-    ).sort((a, b) => a.checkIn.localeCompare(b.checkIn))
+    const bookings = bookingsSnapshot.docs
+      .filter((booking) => bookingBelongsToTenant(booking.data(), ownerUid, legacyOwnerUid))
+      .map((booking) => {
+        const data = booking.data()
+        return {
+          id: booking.id,
+          name: String(data.name || "Guest"),
+          roomId: String(data.roomId || ""),
+          roomType: String(data.roomType || "Room"),
+          checkIn: String(data.checkIn || ""),
+          checkOut: String(data.checkOut || ""),
+          status: String(data.status || ""),
+          stayStatus: String(data.stayStatus || "not_checked_in"),
+        }
+      }).filter((booking) =>
+        roomIds.has(booking.roomId)
+        && (booking.status === "Approved" || (booking.status === "Completed" && booking.stayStatus === "checked_out"))
+        && ["not_checked_in", "checked_in", "checked_out"].includes(booking.stayStatus),
+      ).sort((a, b) => a.checkIn.localeCompare(b.checkIn))
     return Response.json({ rooms, roomItems, bookings, inspections })
   } catch (error) {
     console.error("Failed to load room inventory monitoring:", error)
@@ -112,6 +131,7 @@ export async function POST(request) {
 
   const db = getBookingDb()
   if (!db) return jsonFailure("Firebase Admin credentials are not configured.", 503)
+  const legacyOwnerUid = await getLegacyOwnerUidForUser(db, user)
   let body
   try {
     body = await request.json()
@@ -142,7 +162,7 @@ export async function POST(request) {
       const roomId = String(body.roomId || body.item?.roomId || "").trim()
       const roomRef = db.collection("rooms").doc(roomId)
       const roomSnapshot = await roomRef.get()
-      if (!roomSnapshot.exists || !roomBelongsToTenant(roomSnapshot.data(), ownerUid)) {
+      if (!roomSnapshot.exists || !roomBelongsToTenant(roomSnapshot.data(), ownerUid, legacyOwnerUid)) {
         return jsonFailure("Room not found for this resort.", 404)
       }
       if (roomSnapshot.get("isArchived") === true) return jsonFailure("Restore this room before managing its items.", 409)
@@ -241,7 +261,7 @@ export async function POST(request) {
           transaction.get(bookingRef),
           transaction.get(inspectionRef),
         ])
-        if (!booking.exists || booking.get("ownerUid") !== ownerUid) {
+        if (!booking.exists || !bookingBelongsToTenant(booking.data(), ownerUid, legacyOwnerUid)) {
           const error = new Error("Booking not found for this resort.")
           error.status = 404
           throw error
@@ -282,7 +302,7 @@ export async function POST(request) {
     const phase = action === "inspection.pre-check-in" ? "preCheckIn" : "postCheckOut"
     await db.runTransaction(async (transaction) => {
       const booking = await transaction.get(bookingRef)
-      if (!booking.exists || booking.get("ownerUid") !== ownerUid) {
+      if (!booking.exists || !bookingBelongsToTenant(booking.data(), ownerUid, legacyOwnerUid)) {
         const error = new Error("Booking not found for this resort.")
         error.status = 404
         throw error
